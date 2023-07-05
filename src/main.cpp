@@ -1,11 +1,194 @@
+// #define SPEED_TEST
+#ifdef SPEED_TEST
+// Simple speed test for filesystem objects
+// Released to the public domain by Earle F. Philhower, III
+
+#include <FS.h>
+#include <LittleFS.h>
+
+// Choose the filesystem to test
+// WARNING:  The filesystem will be formatted at the start of the test!
+
+#define TESTFS LittleFS
+// #define TESTFS SPIFFS
+// #define TESTFS SDFS
+
+// How large of a file to test
+#define TESTSIZEKB 50
+
+// Format speed in bytes/second.  Static buffer so not re-entrant safe
+const char *rate(unsigned long start, unsigned long stop, unsigned long bytes)
+{
+    static char buff[64];
+    if (stop == start)
+    {
+        strcpy_P(buff, PSTR("Inf b/s"));
+    }
+    else
+    {
+        unsigned long delta = stop - start;
+        float r = 1000.0 * (float)bytes / (float)delta;
+        if (r >= 1000000.0)
+        {
+            sprintf_P(buff, PSTR("%0.2f MB/s"), r / 1000000.0);
+        }
+        else if (r >= 1000.0)
+        {
+            sprintf_P(buff, PSTR("%0.2f KB/s"), r / 1000.0);
+        }
+        else
+        {
+            sprintf_P(buff, PSTR("%d bytes/s"), (int)r);
+        }
+    }
+    return buff;
+}
+
+void DoTest(FS *fs)
+{
+    if (!fs->format())
+    {
+        Serial.printf("Unable to format(), aborting\n");
+        return;
+    }
+    if (!fs->begin())
+    {
+        Serial.printf("Unable to begin(), aborting\n");
+        return;
+    }
+
+    uint8_t data[256];
+    for (int i = 0; i < 256; i++)
+    {
+        data[i] = (uint8_t)i;
+    }
+
+    Serial.printf("Creating %dKB file, may take a while...\n", TESTSIZEKB);
+    unsigned long start = millis();
+    File f = fs->open("/testwrite.bin", "w");
+    if (!f)
+    {
+        Serial.printf("Unable to open file for writing, aborting\n");
+        return;
+    }
+    for (int i = 0; i < TESTSIZEKB; i++)
+    {
+        for (int j = 0; j < 4; j++)
+        {
+            f.write(data, 256);
+        }
+    }
+    f.close();
+    unsigned long stop = millis();
+    Serial.printf("==> Time to write %dKB in 256b chunks = %lu milliseconds\n", TESTSIZEKB, stop - start);
+
+    f = fs->open("/testwrite.bin", "r");
+    Serial.printf("==> Created file size = %zu\n", f.size());
+    f.close();
+
+    Serial.printf("Reading %dKB file sequentially in 256b chunks\n", TESTSIZEKB);
+    start = millis();
+    f = fs->open("/testwrite.bin", "r");
+    for (int i = 0; i < TESTSIZEKB; i++)
+    {
+        for (int j = 0; j < 4; j++)
+        {
+            f.read(data, 256);
+        }
+    }
+    f.close();
+    stop = millis();
+    Serial.printf("==> Time to read %dKB sequentially in 256b chunks = %lu milliseconds = %s\n", TESTSIZEKB, stop - start, rate(start, stop, TESTSIZEKB * 1024));
+
+    Serial.printf("Reading %dKB file MISALIGNED in flash and RAM sequentially in 256b chunks\n", TESTSIZEKB);
+    start = millis();
+    f = fs->open("/testwrite.bin", "r");
+    f.read();
+    for (int i = 0; i < TESTSIZEKB; i++)
+    {
+        for (int j = 0; j < 4; j++)
+        {
+            f.read(data + 1, 256);
+        }
+    }
+    f.close();
+    stop = millis();
+    Serial.printf("==> Time to read %dKB sequentially MISALIGNED in flash and RAM in 256b chunks = %lu milliseconds = %s\n", TESTSIZEKB, stop - start, rate(start, stop, TESTSIZEKB * 1024));
+
+    Serial.printf("Reading %dKB file in reverse by 256b chunks\n", TESTSIZEKB);
+    start = millis();
+    f = fs->open("/testwrite.bin", "r");
+    for (int i = 0; i < TESTSIZEKB; i++)
+    {
+        for (int j = 0; j < 4; j++)
+        {
+            if (!f.seek(256 + 256 * j * i, SeekEnd))
+            {
+                Serial.printf("Unable to seek to %d, aborting\n", -256 - 256 * j * i);
+                return;
+            }
+            if (256 != f.read(data, 256))
+            {
+                Serial.printf("Unable to read 256 bytes, aborting\n");
+                return;
+            }
+        }
+    }
+    f.close();
+    stop = millis();
+    Serial.printf("==> Time to read %dKB in reverse in 256b chunks = %lu milliseconds = %s\n", TESTSIZEKB, stop - start, rate(start, stop, TESTSIZEKB * 1024));
+
+    Serial.printf("Writing 64K file in 1-byte chunks\n");
+    start = millis();
+    f = fs->open("/test1b.bin", "a");
+    for (int i = 0; i < 65536; i++)
+    {
+        f.write((uint8_t *)&i, 1);
+    }
+    f.close();
+    stop = millis();
+    Serial.printf("==> Time to write 64KB in 1b chunks = %lu milliseconds = %s\n", stop - start, rate(start, stop, 65536));
+
+    Serial.printf("Reading 64K file in 1-byte chunks\n");
+    start = millis();
+    f = fs->open("/test1b.bin", "r");
+    for (int i = 0; i < 65536; i++)
+    {
+        char c;
+        f.read((uint8_t *)&c, 1);
+    }
+    f.close();
+    stop = millis();
+    Serial.printf("==> Time to read 64KB in 1b chunks = %lu milliseconds = %s\n", stop - start, rate(start, stop, 65536));
+
+    start = millis();
+    auto dest = fs->open("/test1bw.bin", "w");
+    f = fs->open("/test1b.bin", "r");
+    auto copysize = f.sendAll(dest);
+    dest.close();
+    stop = millis();
+    Serial.printf("==> Time to copy %d = %zd bytes = %lu milliseconds = %s\n", f.size(), copysize, stop - start, rate(start, stop, f.size()));
+    f.close();
+}
+
+void setup()
+{
+    Serial.begin(115200);
+    Serial.printf("Beginning test\n");
+    Serial.flush();
+    DoTest(&TESTFS);
+    Serial.println("done");
+}
+
+void loop()
+{
+    delay(10000);
+}
+#else
 #include "I2Cdev.h"
 #include "MPU6050.h"
 #include "FS.h"
 #include "LittleFS.h" // Used to store flight data in EEPROM/Flash
-// Wifi and OTA
-#include <ESP8266WiFi.h>
-#include <ESP8266HTTPClient.h>
-#include <ArduinoOTA.h>
 #include <Adafruit_BMP280.h>
 
 // Arduino Wire library is required if I2Cdev I2CDEV_ARDUINO_WIRE implementation
@@ -15,13 +198,11 @@
 #endif
 #define DEBUG // Comment out to disable debug messages
 #define VERSION "0.1.1"
-#define FORMAT_LITTLEFS_IF_FAILED true
 
 #define SDA 0
 #define SCL 2
 
-const int ramBufferLength = 100;
-const int flushInterval = 90; // flush to FS every x entries
+const int flushInterval = 50; // flush to FS every x entries
 const char *metadataFilename = "/metadata.csv";
 const char *filenameBase = "/flight_";
 const char *filenameExt = ".csv";
@@ -40,26 +221,61 @@ const int gzOffset = 0.0;
 MPU6050 accelgyro;   // I2C MPU6050 IMU
 Adafruit_BMP280 bmp; // I2C bmp280 barometer for altitude
 
-int16_t ax, ay, az;
-int16_t gx, gy, gz;
-uint16_t pressure, altitude;
-
 bool mpu_state = false;
 bool wifi_state = false;
 bool bmp_state = false;
 
-int ramBuffer[ramBufferLength][6]; // 6 columns for ax, ay, az, gx, gy, gz
-int ramBufferIndex = 0;
-int entriesSinceLastFlush = 0;
-uint32_t flightIdNumber = 0; // Loaded from metadata file on startup and incremented on each flight
+int16_t ax, ay, az;
+int16_t gx, gy, gz;
+float pressure, bmpTemperature;
 
-uint16_t accelerations[ramBufferLength][3];
-float velocities[ramBufferLength][3];
-float altitudes[ramBufferLength];
+uint32_t flightIdNumber = 1; // Loaded from metadata file on startup and incremented on each flight
+File flightFile;
+
+int entriesSinceLastFlush = 0;
 
 unsigned long previousTime = 0;
 unsigned long currentTime = 0;
 unsigned long deltaTime = 0;
+
+bool recordState = false; // Set to true to start recording data
+
+void log_filesystem_info()
+{
+    Serial.println("- Filesystem info:");
+    FSInfo fs_info;
+    LittleFS.info(fs_info);
+    Serial.print(" Total bytes: ");
+    Serial.println(fs_info.totalBytes);
+    Serial.print(" Used bytes: ");
+    Serial.println(fs_info.usedBytes);
+    Serial.print(" Block size: ");
+    Serial.println(fs_info.blockSize);
+    Serial.print(" Page size: ");
+    Serial.println(fs_info.pageSize);
+    Serial.print(" Max open files: ");
+    Serial.println(fs_info.maxOpenFiles);
+    Serial.print(" Max path length: ");
+    Serial.println(fs_info.maxPathLength);
+    // Print metadata file contents
+    Serial.println("- Metadata file contents:");
+    File metadataFile = LittleFS.open(metadataFilename, "r");
+    metadataFile.seek(0);
+    while (metadataFile.available())
+    {
+        Serial.write(metadataFile.read());
+    }
+    metadataFile.close();
+    // Print file list
+    Serial.println("- File list:");
+    Dir dir = LittleFS.openDir("/");
+    while (dir.next())
+    {
+        Serial.print(dir.fileName());
+        Serial.print(" - ");
+        Serial.println(dir.fileSize());
+    }
+}
 
 void load_flight_id()
 {
@@ -78,9 +294,9 @@ void load_flight_id()
         Serial.println("(D) Metadata file doesn't exist, creating it");
 #endif
         metadataFile = LittleFS.open(metadataFilename, "r+");
-        metadataFile.println("flight_id=0;");
+        metadataFile.println("flight_id=2;");
         metadataFile.close();
-        flightIdNumber = 0;
+        flightIdNumber = 1;
         return;
     }
     // Find flight_id entry
@@ -126,55 +342,51 @@ void create_flight_file()
     String filename = filenameBase;
     filename += String(flightIdNumber);
     filename += filenameExt;
-    File flightFile = LittleFS.open(filename, "w");
+    flightFile = LittleFS.open(filename, "w");
     flightFile.println("ax,ay,az,gx,gy,gz");
     flightFile.close();
+    flightFile = LittleFS.open(filename, "a");
 }
 
 void setup()
 {
-// join I2C bus (I2Cdev library doesn't do this automatically)
-#if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
-    Wire.begin(SDA, SCL);
-#elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
-    Fastwire::setup(400, true);
-#endif
-
     // initialize serial communication
     Serial.begin(115200);
     Serial.println("CFlight v" + String(VERSION));
-    Serial.println("Initializing WiFi...");
-    Serial.print("- Connecting to ");
-    Serial.println(ssid);
-    WiFi.begin(ssid, password);
-    uint32_t start = millis();
-    wifi_state = true;
-    while (WiFi.status() != WL_CONNECTED)
-    {
-        delay(500);
-        Serial.print(".");
-        if (millis() - start > 10000)
-        {
-            Serial.println("- Connection timed out (Continuing without WiFi)");
-            wifi_state = false;
-        }
-    }
-    if (wifi_state)
-    {
-        Serial.println("- Connected to WiFi");
-        Serial.println("- IP address: ");
-        Serial.println(WiFi.localIP());
-        Serial.println("Initializing OTA...");
-        ArduinoOTA.setHostname("cflight");
-        ArduinoOTA.begin();
-        Serial.println("- OTA initialized, agent name: cflight");
-    }
-    else
-    {
-        Serial.println("- Failed to connect to WiFi");
-    }
+    // Serial.println("Initializing WiFi...");
+    // Serial.print("- Connecting to ");
+    // Serial.println(ssid);
+    // WiFi.begin(ssid, password);
+    // uint32_t start = millis();
+    // wifi_state = true;
+    // while (WiFi.status() != WL_CONNECTED)
+    // {
+    //     delay(500);
+    //     Serial.print(".");
+    //     if (millis() - start > 10000)
+    //     {
+    //         Serial.println("- Connection timed out (Continuing without WiFi)");
+    //         wifi_state = false;
+    //     }
+    // }
+    // if (wifi_state)
+    // {
+    //     Serial.println("- Connected to WiFi");
+    //     Serial.println("- IP address: ");
+    //     Serial.println(WiFi.localIP());
+    //     Serial.println("Initializing OTA...");
+    //     ArduinoOTA.setHostname("cflight");
+    //     ArduinoOTA.begin();
+    //     Serial.println("- OTA initialized, agent name: cflight");
+    // }
+    // else
+    // {
+    //     Serial.println("- Failed to connect to WiFi");
+    // }
     // initialize devices
-    Serial.println("Initializing I2C devices...");
+    Serial.println("Initializing I2C bus & devices...");
+    Wire.begin(SDA, SCL);
+    Serial.println("- Joined I2C bus");
     Serial.println("(IMU):");
     accelgyro.initialize();
     accelgyro.setFullScaleAccelRange(3); // +-16g accel scale
@@ -204,21 +416,41 @@ void setup()
         }
     }
     Serial.println("(BMP):");
-    bmp_state = bmp.begin();
+    bmp_state = bmp.begin(BMP280_ADDRESS, BMP280_CHIPID);
     if (!bmp_state)
     {
-        Serial.println("- Failed to connect to BMP280!");
-        while (1)
+        Serial.print("- Failed to connect to BMP280! SensorID: 0x");
+        Serial.println(bmp.sensorID(), 16);
+        Serial.print("- Trying alternate I2C address 0x");
+        Serial.println(BMP280_ADDRESS_ALT, 16);
+        bmp_state = bmp.begin(BMP280_ADDRESS_ALT, BMP280_CHIPID);
+        if (!bmp_state)
         {
-            delay(1);
+            Serial.println("- Failed to connect to BMP280!");
+            while (1)
+            {
+                delay(1);
+            }
+        }
+        else
+        {
+            Serial.print("- Connected to BMP280! SensorID: 0x");
+            Serial.print(bmp.sensorID(), 16);
+            Serial.println(" (Alternate address)");
         }
     }
-    Serial.println("- Connected to BMP, configuring");
+    else
+    {
+        Serial.print("- Connected to BMP280! SensorID: 0x");
+        Serial.print(bmp.sensorID(), 16);
+        Serial.println(" (Default address)");
+    }
+    Serial.println("- Setting BMP280 parameters...");
     bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,     /* Operating Mode. */
                     Adafruit_BMP280::SAMPLING_X2,     /* Temp. oversampling */
                     Adafruit_BMP280::SAMPLING_X16,    /* Pressure oversampling */
                     Adafruit_BMP280::FILTER_X16,      /* Filtering. */
-                    Adafruit_BMP280::STANDBY_MS_500); /* Standby time. */
+                    Adafruit_BMP280::STANDBY_MS_250); /* Standby time. */
 
     Serial.println("- Done! BMP online");
 
@@ -238,7 +470,7 @@ void setup()
         Serial.println("- Metadata file does not exist, creating...");
         File metadataFile = LittleFS.open(metadataFilename, "w");
         metadataFile.print("flight_id=");
-        metadataFile.println("0;");
+        metadataFile.println("2;");
         metadataFile.close();
     }
     else
@@ -249,6 +481,8 @@ void setup()
     load_flight_id();
     Serial.print("- Flight ID: ");
     Serial.println(flightIdNumber);
+    log_filesystem_info();
+    Serial.println("- Creating flight file...");
     // Create new flight file
     create_flight_file();
     Serial.println("- Created new flight file");
@@ -259,37 +493,10 @@ void flush_buffer_to_file()
 {
 // Flushes ramBuffer to flightFile and resets ramBufferIndex
 #ifdef DEBUG
-    Serial.println("(D) Opening flight file");
     uint32_t start = micros();
 #endif
-    String filename = filenameBase;
-    filename += String(flightIdNumber);
-    filename += filenameExt;
-    File flightFile = LittleFS.open(filename, "a");
-#ifdef DEBUG
-    Serial.print("(D) Opened file in ");
-    Serial.print(micros() - start);
-    Serial.println(" us");
-    start = micros();
-#endif
-    for (int i = 0; i < ramBufferIndex; i++)
-    {
-        flightFile.print(ramBuffer[i][0]);
-        flightFile.print(",");
-        flightFile.print(ramBuffer[i][1]);
-        flightFile.print(",");
-        flightFile.print(ramBuffer[i][2]);
-        flightFile.print(",");
-        flightFile.print(ramBuffer[i][3]);
-        flightFile.print(",");
-        flightFile.print(ramBuffer[i][4]);
-        flightFile.print(",");
-        flightFile.print(ramBuffer[i][5]);
-        flightFile.print("\n");
-    }
-    ramBufferIndex = 0;
+    flightFile.flush();
     entriesSinceLastFlush = 0;
-    flightFile.close();
 #ifdef DEBUG
     Serial.print("(D) Flushed buffer to file in ");
     Serial.print(micros() - start);
@@ -297,53 +504,25 @@ void flush_buffer_to_file()
 #endif
 }
 
-void append_readings()
+void appendToFile()
 {
-    // Adds latest values (in ax, ay, az etc varibles) to in RAM buffer of values
-    ramBuffer[ramBufferIndex][0] = ax;
-    ramBuffer[ramBufferIndex][1] = ay;
-    ramBuffer[ramBufferIndex][2] = az;
-    ramBuffer[ramBufferIndex][3] = gx;
-    ramBuffer[ramBufferIndex][4] = gy;
-    ramBuffer[ramBufferIndex][5] = gz;
-    ramBufferIndex++;
+    flightFile.print(currentTime);
+    flightFile.printf(",%i,%i,%i,%i,%i,%i,%f,%f\n",
+                      ax, ay, az,
+                      gx, gy, gz,
+                      pressure, bmpTemperature);
     entriesSinceLastFlush++;
-    if (ramBufferIndex >= ramBufferLength)
-    {
-        ramBufferIndex = 0;
-    }
 }
 
-void processImu()
+void handleIMU()
 {
-    accelerations[ramBufferIndex][0] = ax;
-    accelerations[ramBufferIndex][1] = ay;
-    accelerations[ramBufferIndex][2] = az;
-    // Integrate for velocity
-    velocities[ramBufferIndex][0] = ax * (deltaTime / 1000);
-    velocities[ramBufferIndex][1] = ay * (deltaTime / 1000);
-    velocities[ramBufferIndex][2] = az * (deltaTime / 1000);
-    ramBufferIndex++;
+    accelgyro.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
 }
 
-void debugPrintReadings()
+void handleBMP()
 {
-    Serial.print("(D) data:");
-    Serial.print(deltaTime);
-    Serial.print(",");
-    // Accelerations
-    Serial.print(accelerations[ramBufferIndex - 1][0]);
-    Serial.print(",");
-    Serial.print(accelerations[ramBufferIndex - 1][1]);
-    Serial.print(",");
-    Serial.print(accelerations[ramBufferIndex - 1][2]);
-    Serial.print(",");
-    // Velocities
-    Serial.print(velocities[ramBufferIndex - 1][0]);
-    Serial.print(",");
-    Serial.print(velocities[ramBufferIndex - 1][1]);
-    Serial.print(",");
-    Serial.print(velocities[ramBufferIndex - 1][2]);
+    pressure = bmp.readPressure();
+    bmpTemperature = bmp.readTemperature();
 }
 
 void loop()
@@ -351,9 +530,89 @@ void loop()
     currentTime = millis();
     deltaTime = currentTime - previousTime;
     // read raw accel/gyro measurements from device
-    accelgyro.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
-    processImu();
-#ifdef DEBUG
-    debugPrintReadings()
-#endif
+    handleIMU();
+    handleBMP();
+    if (recordState)
+    {
+        appendToFile();
+        if (entriesSinceLastFlush >= flushInterval)
+        {
+            flush_buffer_to_file();
+        }
+    }
+
+    if (Serial.available() > 0)
+    {
+        char command = Serial.read();
+        if (command == 'r')
+        {
+            recordState = !recordState;
+            if (recordState)
+            {
+                Serial.println("Recording started");
+            }
+            else
+            {
+                Serial.println("Recording stopped");
+            }
+        }
+        else if (command == 'b' && recordState)
+        {
+            Serial.println("Reading flight file to serial...");
+            recordState = false;
+            flightFile.flush();
+            flightFile.close();
+            String filename = filenameBase;
+            filename += String(flightIdNumber);
+            filename += filenameExt;
+            File flightFileRB = LittleFS.open(filename, "r");
+            flightFileRB.seek(0);
+            Serial.println("<BOF>");
+            while (flightFileRB.available())
+            {
+                Serial.write(flightFileRB.read());
+            }
+            flightFileRB.close();
+            flightFile = LittleFS.open(filename, "a");
+            Serial.println("<EOF>");
+        }
+        else if (command == 'e' && !recordState)
+        {
+            recordState = false;
+            Serial.println("Erasing filesystem...");
+            LittleFS.format();
+            Serial.println("Done! Rebooting...");
+            ESP.restart();
+        }
+        else if (command == 'i')
+        {
+            // Print filesystem info (eg. used space, free space, etc.)
+            log_filesystem_info();
+        } else if (command == 'd' && !recordState) {
+            // Download/ print to serial a flight file
+            Serial.println("Enter flight ID to download (0 for latest):");
+            Serial.print("List of flights: ");
+            // List all files in the root
+            Dir dir = LittleFS.openDir("/");
+            while (dir.next())
+            {
+                Serial.print(dir.fileName());
+                Serial.print(" ");
+            }
+            Serial.println();
+            Serial.print("> ");
+            while (Serial.available() == 0)
+            {
+                delay(1);
+            }
+            String flightIdString = Serial.readStringUntil('\n');
+            int flightId = flightIdString.toInt();
+            if (flightId == 0) {
+                flightId = flightIdNumber;
+            }
+            Serial.print("Downloading flight ");
+        }
+    }
 }
+
+#endif
