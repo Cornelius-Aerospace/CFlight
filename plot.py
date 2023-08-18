@@ -5,7 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import time
 
-PORT = '/dev/ttyACM0'
+PORT = '/dev/ttyUSB0'
 BAUD = 115200
 TIMEOUT = 1
 HISTORY = 100 # Number of data points to plot
@@ -26,7 +26,7 @@ gys = []
 gzs = []
 # Set up plot
 ax.set_xlim(0, 100)
-ax.set_ylim(-180, 180)
+# ax.set_ylim(-180, 180)
 ax.set_xlabel('Time')
 ax.set_ylabel('Angle')
 ax.set_title('MPU6050 Data')
@@ -42,16 +42,16 @@ ax.legend()
 # Main loop
 while True:
     try:
-        data_raw = ser.readline().decode('utf-8').replace('a/g:', '').strip()
-        data_raw = data_raw.split('\t')
-        if (len(data_raw) == 6):
+        data_raw = ser.readline().decode('utf-8').strip()
+        data_raw = data_raw.split(',')
+        if (len(data_raw) == 15):
             print(data_raw)
-        #    axs.append(float(data_raw[0]))
-        #    ays.append(float(data_raw[1]))
-        #    azs.append(float(data_raw[2]))
-            gxs.append(float(data_raw[3]))
-            gys.append(float(data_raw[4]))
-            gzs.append(float(data_raw[5]))
+        #    axs.append(float(data_raw[1]))
+        #    ays.append(float(data_raw[2]))
+        #    azs.append(float(data_raw[3]))
+            gxs.append(float(data_raw[1]))
+            gys.append(float(data_raw[2]))
+            gzs.append(float(data_raw[3]))
             if (len(gxs) > HISTORY):
                # axs.pop(0)
               #  ays.pop(0)
