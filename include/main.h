@@ -5,6 +5,8 @@
 #include "MPU6050.h"
 #include <Adafruit_BMP280.h>
 #include <Wire.h>
+#include "WiFi.h"
+#include <TinyGPSPlus.h>
 
 #define DEBUG // Comment out to disable debug messages
 #define VERSION "0.2.0"
@@ -13,30 +15,38 @@
 #define SDA 21
 #define SCL 22
 
+// GPS serial2 pins (RX, TX)
+#define GPS_RX 16
+#define GPS_TX 17
+
 #define STATUS_LED 12
 #define ERROR_LED 13
-#define BUZZER_PIN 4
+#define BUZZER_PIN 2
 
 // LED patterns
-#define LED_ON_SHORT 250
-#define LED_ON_MED 500
+#define LED_ON_SHORT 100
+#define LED_ON_MED 200
 #define LED_ON_LONG 1000
 
-#define LED_OFF_SHORT 200
-#define LED_OFF_MED 1000
-#define LED_OFF_LONG 2000
+#define LED_OFF_SHORT 100
+#define LED_OFF_MED 300
+#define LED_OFF_LONG 1000
 
-#define LAUNCH_DETECT_THRESHOLD 2 // Meters
-#define LAUNCH_DETECT_TICKS 300     // This many ticks for confirmed launch
+#define LAUNCH_DETECT_THRESHOLD 1 // Meters
+#define LAUNCH_DETECT_TICKS 50     // This many ticks for confirmed launch
 
-#define DESCENT_DETECT_THRESHOLD -2
-#define DESCENT_DETECT_TICKS 400
+#define DESCENT_DETECT_THRESHOLD -1
+#define DESCENT_DETECT_TICKS 70
 
-#define LANDED_DETECT_THRESHOLD_LOW -0.4 // Meters
-#define LANDED_DETECT_THRESHOLD_HIGH 0.4 // Meters
-#define LANDED_DETECT_TICKS 5000         // Number of ticks with subthreshold altitude change for landing event
+#define LANDED_DETECT_THRESHOLD_LOW -0.3 // Meters
+#define LANDED_DETECT_THRESHOLD_HIGH 0.3 // Meters
+#define LANDED_DETECT_TICKS 500         // Number of ticks with subthreshold altitude change for landing event
 
-#define LOG_INTERVAL 1000 // ms between (minimal) data log
+#define LOG_INTERVAL 500 // ms between (minimal) data log
+#define SPEED_INTERVAL 25 // ms between speed calculations
+
+#define HISTORY_SIZE 25000
+#define HISTORY_INTERVAL 50 // ms between history updates
 
 const unsigned long idleLedPattern[] = {
     LED_ON_SHORT,
@@ -46,7 +56,7 @@ const unsigned long idleLedPattern[] = {
 };
 
 const unsigned long calibrateLedPattern[] = {
-    LED_ON_MED, LED_OFF_MED};
+    LED_ON_LONG, LED_OFF_SHORT};
 
 const unsigned long armedLedPattern[] = {
     LED_ON_SHORT, LED_OFF_SHORT};
@@ -58,8 +68,22 @@ const unsigned long groundLedPattern[] = {
     LED_OFF_LONG,
 };
 
+float* altitudeHistory;
+float* speedHistory;
+unsigned long logIndex = 0;
+unsigned long finalLogIndex = 0;
+unsigned long lastHistoryEntry = 0;
+
+bool loggingData = false;
+
+const char* SSID = "CFlight";
+const char* psk = "there IS no sp00n";
+WiFiServer wifiServer(8080);
+WiFiClient ground_station;
+
 MPU6050 accelgyro;   // I2C MPU6050 IMU
 Adafruit_BMP280 bmp; // I2C bmp280 barometer for altitude
+TinyGPSPlus gps;    // Serial GPS
 
 bool mpu_state = false;
 bool bmp_state = false;
@@ -75,13 +99,18 @@ int gzOffset = 0.0;
 int16_t ax, ay, az;
 int16_t gx, gy, gz;
 float pressure, bmpTemperature, altitude, previousAltitude;
+
 unsigned long previousTime = 0;
 unsigned long currentTime = 0;
 unsigned long deltaTime = 0;
+
 float deltaAltitude = 0;
-
 float peakAltitude = 0; // The largest altitude seen so far (locked at descent)
+float verticalVelocity = 0;
+float peakVerticalVelocity = 0; // The largest vertical velocity seen so far (locked at descent)
+unsigned long peakVerticalVelocityTime = 0;
 
+bool calibrate_done = false;
 enum State
 {
     IDLE,
@@ -108,7 +137,7 @@ enum Command
     ENTER_CALIBRATE,     // Move to calibrate (from idle) 6
     REPORT,        // Send systems report 7
     SYSTEMCHECK,   // Perform systems check 8
-    TOGGLESOUND,   // Toggle buzzer manually 9
+    TOGGLE_SOUND,   // Toggle buzzer manually 9
     LOCATE,        // Report location only (gps coords) 10 
     ENTER_GROUNDSTATION, // Enter GS mode (from any non flight mode) 11
     ABORT,         // CATO/ perform emergancy procedures (depends on state) 12
@@ -117,6 +146,7 @@ enum Command
 
 State state = State::IDLE;
 int stateChanged = 0; // Has the state changed since last tick(); (0 - no, 1 - yes, 2 - state changing this tick (ignore))
+String commandCollector = "";
 
 uint16_t launchDetectTicker = 0;
 uint16_t descentTicker = 0;
@@ -143,8 +173,15 @@ bool buzzerState = false;
 
 float initalPresure = 0;                                                      // Presure at launch pad
 unsigned long launchEventTimestamp, apoggeeEventTimestamp, landingEventTimestamp = 0; // Time at which the events were detected
-
 unsigned long lastLogEvent = 0;
+
+float speedTicker = 0;
+unsigned long gpsSatilliteCount = 0;
+double gpsLatitude, gpsLongitude, gpsAltitude = 0;
+bool gpsFix = false;
+int32_t gpsHdop = 0;
+double gpsSpeed = 0;
+
 // Function prototypes
 void initSensors();
 void initErrorLoop();
