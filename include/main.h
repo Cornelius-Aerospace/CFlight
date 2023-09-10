@@ -1,14 +1,19 @@
 #ifndef MAIN_H
 #define MAIN_H
+#define SIM_MODE // comment out for physical use of sensors
+
 // Include libraries
 #include "I2Cdev.h"
+#ifndef SIM_MODE
 #include "MPU6050.h"
 #include <Adafruit_BMP280.h>
-#include <Wire.h>
-#include "WiFi.h"
 #include <TinyGPSPlus.h>
 
-#define DEBUG // Comment out to disable debug messages
+#endif
+#include <Wire.h>
+#include "WiFi.h"
+
+// #define DEBUG // Comment out to disable debug messages
 #define VERSION "0.2.0"
 
 // I2C pins (SDA, SCL)
@@ -19,9 +24,9 @@
 #define GPS_RX 16
 #define GPS_TX 17
 
-#define STATUS_LED 12
-#define ERROR_LED 13
-#define BUZZER_PIN 2
+#define STATUS_LED 2
+#define ERROR_LED 12
+#define BUZZER_PIN 18
 
 // LED patterns
 #define LED_ON_SHORT 100
@@ -32,21 +37,22 @@
 #define LED_OFF_MED 300
 #define LED_OFF_LONG 1000
 
-#define LAUNCH_DETECT_THRESHOLD 1 // Meters
-#define LAUNCH_DETECT_TICKS 50     // This many ticks for confirmed launch
+#define LAUNCH_DETECT_THRESHOLD 1.0 // Meters
+#define LAUNCH_DETECT_TICKS 5     // This many ticks for confirmed launch
 
-#define DESCENT_DETECT_THRESHOLD -1
-#define DESCENT_DETECT_TICKS 70
+#define DESCENT_DETECT_THRESHOLD 1.0
+#define DESCENT_DETECT_TICKS 3
 
 #define LANDED_DETECT_THRESHOLD_LOW -0.3 // Meters
 #define LANDED_DETECT_THRESHOLD_HIGH 0.3 // Meters
-#define LANDED_DETECT_TICKS 500         // Number of ticks with subthreshold altitude change for landing event
+#define LANDED_DETECT_TICKS 20         // Number of ticks with subthreshold altitude change for landing event
 
-#define LOG_INTERVAL 500 // ms between (minimal) data log
-#define SPEED_INTERVAL 25 // ms between speed calculations
+#define LOG_INTERVAL 50 // ms between (minimal) data log
+#define SPEED_INTERVAL 50 // ms between speed calculations
 
-#define HISTORY_SIZE 25000
+#define HISTORY_SIZE 15000 // max dynamically allocated DRAM (15KB) https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/memory-types.html
 #define HISTORY_INTERVAL 50 // ms between history updates
+#define LOG_SENSOR_COUNT 2 // Altitude, Vertical Velocity
 
 const unsigned long idleLedPattern[] = {
     LED_ON_SHORT,
@@ -73,20 +79,20 @@ float* speedHistory;
 unsigned long logIndex = 0;
 unsigned long finalLogIndex = 0;
 unsigned long lastHistoryEntry = 0;
-
 bool loggingData = false;
 
 const char* SSID = "CFlight";
 const char* psk = "there IS no sp00n";
 WiFiServer wifiServer(8080);
 WiFiClient ground_station;
-
+#ifndef SIM_MODE
 MPU6050 accelgyro;   // I2C MPU6050 IMU
 Adafruit_BMP280 bmp; // I2C bmp280 barometer for altitude
 TinyGPSPlus gps;    // Serial GPS
 
 bool mpu_state = false;
 bool bmp_state = false;
+#endif
 // IMU offsets
 int useImuOffsets = false;
 int axOffset = 0.0;
@@ -155,9 +161,9 @@ uint16_t landedTicker = 0;
 Command activeCommand = Command::NONE;
 unsigned long commandData = 0; // Data passed with command
 
-uint16_t mainDeploymentAltitude = 0; // Altitude at which main chute deployed (0 to disable)
-bool drougeChuteEnabled = false;     // If true fire DrougeCH pyro at detect apogee
-bool dualDeploymentEnabled = false;  // If true wait for mainDeploymentAltitude and then fire DDMainCH
+uint16_t mainDeploymentAltitude = 150; // Altitude at which main chute deployed (0 to disable)
+bool drougeChuteEnabled = true;     // If true fire DrougeCH pyro at detect apogee
+bool dualDeploymentEnabled = true;  // If true wait for mainDeploymentAltitude and then fire DDMainCH
 
 bool drougeFired = false;    // set true after drouge pyro fired
 bool mainChuteFired = false; // Set true after dual deploy main chute fired
@@ -182,14 +188,18 @@ bool gpsFix = false;
 int32_t gpsHdop = 0;
 double gpsSpeed = 0;
 
+
 // Function prototypes
 void initSensors();
 void initErrorLoop();
+String formatTimestamp(unsigned long timestamp);
+
 
 // Tasks
 void logData();
 void pollImu();
 void pollBmp();
+void handleWifi();
 
 void minimalLog();
 void readCmd();

@@ -16,8 +16,10 @@ void initErrorLoop()
 void allocateHistoryMemory()
 {
     Serial.print("Allocating ");
-    Serial.print(HISTORY_SIZE * sizeof(float) * 2);
-    Serial.println(" Bytes for history buffers");
+    Serial.print(HISTORY_SIZE * LOG_SENSOR_COUNT * sizeof(float));
+    Serial.print(" Bytes for history buffers with: ");
+    Serial.print(LOG_SENSOR_COUNT);
+    Serial.println(" sensors");
     Serial.printf("\n\navailable heap befor allocating %i\n", ESP.getFreeHeap());
     Serial.printf("biggest free block: %i\n", heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     altitudeHistory = (float *)calloc(HISTORY_SIZE, sizeof(float));
@@ -28,6 +30,7 @@ void allocateHistoryMemory()
 
 void initSensors()
 {
+#ifndef SIM_MODE
     Serial.println("Initializing I2C bus & devices...");
     Wire.begin(SDA, SCL);
     Serial.println("- Joined I2C bus");
@@ -79,10 +82,12 @@ void initSensors()
     Serial.println("Connecting to GPS...");
     Serial2.begin(9600, SERIAL_8N1, GPS_RX, GPS_TX);
     Serial.println("- Done! GPS online");
+#endif
 }
 
 void pollGps()
 {
+#ifndef SIM_MODE
     while (Serial2.available())
         gps.encode(Serial2.read());
 
@@ -114,8 +119,9 @@ void pollGps()
     }
     if (currentTime > 5000 && gps.charsProcessed() < 10)
     {
-        Serial.println("No GPS detected: check wiring.");
+        // Serial.println("No GPS detected: check wiring.");
     }
+#endif
 }
 
 void initWiFi()
@@ -142,6 +148,15 @@ void setup()
     Serial.println("Boot complete!");
     previousTime = millis();
     currentTime = millis();
+#ifdef SIM_MODE
+    commandCollector = "";
+    Serial.println("Sim mode: awaiting packets");
+    commandCollector += Serial.readString();
+    commandCollector = "";
+    Serial.println("ACK");
+    state = State::ARMED;
+
+#endif
 }
 
 void logData()
@@ -165,30 +180,41 @@ void logData()
 
 void pollImu()
 {
-
+#ifndef SIM_MODE
     accelgyro.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+#endif
 }
 
 void pollBmp()
 {
-
+#ifndef SIM_MODE
     pressure = bmp.readPressure();          // SI units (pascal)
     pressure /= 100;                        // Now in MPa
     bmpTemperature = bmp.readTemperature(); // Deg c
+#endif
     speedTicker += deltaTime;
     altitude = 44330 * (1.0 - pow(pressure / initalPresure, 0.1903)); // meters
+
     // Calculate vertical speed
+    if (altitude > peakAltitude && isfinite(altitude))
+    {
+        peakAltitude = altitude;
+        apoggeeEventTimestamp = currentTime;
+    }
     if (speedTicker >= SPEED_INTERVAL)
     {
         // SPEED_INTERVAL has passed, calculate vertical speed
-        speedTicker = 0;
-        verticalVelocity = (altitude - previousAltitude) / (SPEED_INTERVAL / 1000.0); // m/s
+
+        verticalVelocity = (altitude - previousAltitude); // Delta meters
+        verticalVelocity /= speedTicker / 1000;
+
         previousAltitude = altitude;
-        if (verticalVelocity > peakVerticalVelocity)
+        if (verticalVelocity > peakVerticalVelocity && isfinite(altitude))
         {
             peakVerticalVelocity = verticalVelocity;
             peakVerticalVelocityTime = currentTime;
         }
+        speedTicker = 0;
     }
     speedTicker += deltaTime;
 }
@@ -252,17 +278,23 @@ void systemCheck()
 
 void humanLogTimestamp(unsigned long timestamp)
 {
-    auto now = timestamp;
-    byte minute = (now / 60000);
-    now -= (minute * 60000);
-    byte second = (now / 1000);
-    Serial.print(minute);
-    Serial.print(":");
-    if (second < 10)
-    {
-        Serial.print("0");
-    }
-    Serial.print(second);
+    Serial.print(formatTimestamp(timestamp));
+}
+
+String formatTimestamp(unsigned long timestamp)
+{
+    unsigned long milliseconds = timestamp % 1000;
+    timestamp /= 1000;
+    unsigned long seconds = timestamp % 60;
+    timestamp /= 60;
+    unsigned long minutes = timestamp;
+
+    char formattedTime[12]; // Buffer for the formatted time string
+
+    // Format the time components into the desired string format with leading zeros
+    snprintf(formattedTime, sizeof(formattedTime), "%02lu:%02lu.%03lu", minutes, seconds, milliseconds);
+
+    return String(formattedTime);
 }
 
 void report()
@@ -276,17 +308,19 @@ void report()
     Serial.print("m, At time: ");
     humanLogTimestamp(apoggeeEventTimestamp);
     Serial.println();
-    Serial.println("Max speed: ");
+    Serial.print("Max speed: ");
     Serial.print(peakVerticalVelocity);
     Serial.print("m/s, At time: ");
     humanLogTimestamp(currentTime);
+    Serial.println();
     Serial.print("Touchdown at: ");
     humanLogTimestamp(landingEventTimestamp);
     Serial.println();
     Serial.print("Flight time: ");
     humanLogTimestamp(landingEventTimestamp - launchEventTimestamp);
+    Serial.println();
     Serial.println("-- Data --");
-    Serial.print("time,altitude,speed");
+    Serial.println("time,altitude,speed");
     for (int i = 0; i < finalLogIndex; i++)
     {
         Serial.print(i * HISTORY_INTERVAL);
@@ -312,18 +346,11 @@ void tick()
     }
     if (state == State::IDLE)
     {
-        if (activeCommand == Command::ENTER_CALIBRATE)
-        {
-            stateChange(State::CALIBRATE);
-        }
-        else if (activeCommand == Command::SYSTEMCHECK)
+        if (activeCommand == Command::SYSTEMCHECK)
         {
             systemCheck();
         }
-        else if (activeCommand == Command::ARM && calibrate_done)
-        {
-            stateChange(State::ARMED);
-        }
+
         else if (activeCommand == Command::TOGGLE_DROUGE_ENABLED)
         {
             drougeChuteEnabled = !drougeChuteEnabled;
@@ -332,9 +359,6 @@ void tick()
         {
             dualDeploymentEnabled = !dualDeploymentEnabled;
         }
-    }
-    if (state == State::CALIBRATE)
-    {
         if (stateChanged == 1 && !calibrate_done)
         {
             initalPresure = pressure; // First tick in cal mode, set initalPressure
@@ -366,7 +390,7 @@ void tick()
             else
             {
                 // We are looking for a takeoff event
-                if (verticalVelocity >= LAUNCH_DETECT_THRESHOLD)
+                if (altitude >= LAUNCH_DETECT_THRESHOLD)
                 {
                     launchDetectTicker++;
                     if (launchDetectTicker == 1)
@@ -391,12 +415,12 @@ void tick()
         else if (state == State::ASCENT)
         {
             // Are we still in-ascent
-            if (verticalVelocity > 0 || altitude > peakAltitude)
+            if (altitude > peakAltitude)
             {
                 peakAltitude = altitude;
                 descentTicker = 0;
             }
-            else if (verticalVelocity <= LAUNCH_DETECT_THRESHOLD)
+            else if (peakAltitude - altitude >= LAUNCH_DETECT_THRESHOLD)
             {
                 descentTicker++;
                 if (descentTicker == 1)
@@ -456,7 +480,7 @@ void updateOutputs()
 {
     if (buzzerState)
     {
-        digitalWrite(BUZZER_PIN, HIGH);
+        tone(BUZZER_PIN, 2000, 500);
     }
     else
     {
@@ -575,11 +599,18 @@ void updateOutputs()
     }
 }
 
+void saveFlight()
+{
+    Serial.println("Unimplemented");
+}
+
 Command parseCmd()
 {
     commandCollector.replace("\n", "");
     Serial.print("Command: ");
     Serial.println(commandCollector);
+#ifndef SIM_MODE
+
     // 0: Toggle_dual_deployment, so on
     if (commandCollector == "ARM")
         return Command::ARM;
@@ -601,7 +632,18 @@ Command parseCmd()
         return Command::LOCATE;
     if (commandCollector == "GNDST")
         return Command::ENTER_GROUNDSTATION;
+    if (commandCollector == "SAVE")
+    {
+        saveFlight();
+    }
+    if (commandCollector == "RST")
+    {
+        ESP.restart();
+    }
     Serial.println("Unknown command");
+    return Command::NONE;
+#endif
+
     return Command::NONE;
 }
 
@@ -615,6 +657,7 @@ void readCmd()
     {
         if (Serial.available() > 0)
         {
+#ifndef SIM_MODE
             char c = Serial.read();
             commandCollector += c;
             if (commandCollector.endsWith("\n"))
@@ -626,6 +669,41 @@ void readCmd()
             {
                 activeCommand = Command::NONE;
             }
+#endif
+#ifdef SIM_MODE
+
+            long currentTimeT = Serial.parseInt();
+            if (currentTimeT != 0)
+            {
+                currentTime = currentTimeT;
+
+#ifdef DEBUG
+                Serial.print("time: ");
+                Serial.print(currentTime);
+#endif
+
+                pressure = Serial.parseFloat();
+                if (initalPresure == 0)
+                {
+                    initalPresure = pressure;
+                }
+#ifdef DEBUG
+                Serial.print(" pressure: ");
+                Serial.print(pressure);
+#endif
+                gpsLatitude = Serial.parseFloat();
+#ifdef DEBUG
+                Serial.print(", lat: ");
+                Serial.print(gpsLatitude);
+#endif
+                gpsLongitude = Serial.parseFloat();
+#ifdef DEBUG
+                Serial.print(", long: ");
+                Serial.println(gpsLongitude);
+#endif
+                gpsFix = true;
+            }
+#endif
         }
         else
         {
@@ -733,27 +811,29 @@ void minimalLog()
     Serial.print(initalPresure);
     Serial.print(", gpsFix: ");
     Serial.print(gpsFix ? "true" : "false");
-    Serial.print(", GPS satillites: ");
-    Serial.print(gpsSatilliteCount);
+    //  Serial.print(", GPS satillites: ");
+    //  Serial.print(gpsSatilliteCount);
     Serial.print(", lat: ");
     Serial.print(gpsLatitude);
     Serial.print(", long: ");
     Serial.print(gpsLongitude);
-    Serial.print(", GPS alt: ");
-    Serial.print(gpsAltitude);
-    Serial.print(", GPS speed: ");
-    Serial.print(gpsSpeed);
-    Serial.print(", GPS HDOP: ");
-    Serial.print(gpsHdop);
+    //  Serial.print(", GPS alt: ");
+    //  Serial.print(gpsAltitude);
+    //  Serial.print(", GPS speed: ");
+    // Serial.print(gpsSpeed);
+    //  Serial.print(", GPS HDOP: ");
+    //  Serial.print(gpsHdop);
     Serial.print(", State: ");
     Serial.println(StateNames[(int)state]);
 }
 
 void loop()
 {
-    previousTime = currentTime;
+#ifndef SIM_MODE
     currentTime = millis();
+
     deltaTime = currentTime - previousTime;
+#endif
     // If we are not connected to a ground station check if there is a new client
     if (wifiServer.hasClient() && !ground_station.connected())
     {
@@ -763,10 +843,14 @@ void loop()
     }
     pollImu();
     pollBmp();
-    pollGps();
+    // pollGps();
     readCmd();
+#ifdef SIM_MODE
+    deltaTime = currentTime - previousTime;
+#endif
     tick();
     updateOutputs();
     logData();
     delay(1);
+    previousTime = currentTime;
 }
