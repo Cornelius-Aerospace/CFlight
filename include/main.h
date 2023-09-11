@@ -1,7 +1,6 @@
 #ifndef MAIN_H
 #define MAIN_H
 #define SIM_MODE // comment out for physical use of sensors
-
 // Include libraries
 #include "I2Cdev.h"
 #ifndef SIM_MODE
@@ -15,8 +14,8 @@
 #include "FS.h"
 #include "SD.h"
 #include "SPI.h"
-
-// #define DEBUG // Comment out to disable debug messages
+#include <time.h>
+#define DEBUG // Comment out to disable debug messages
 #define VERSION "0.2.0"
 
 // I2C pins (SDA, SCL)
@@ -29,7 +28,7 @@
 
 #define STATUS_LED 2
 #define ERROR_LED 12
-#define BUZZER_PIN 18
+#define BUZZER_PIN 13
 
 // LED patterns
 #define LED_ON_SHORT 100
@@ -53,17 +52,24 @@
 #define LOG_INTERVAL 50   // ms between (minimal) data log
 #define SPEED_INTERVAL 50 // ms between speed calculations
 
-#define HISTORY_SIZE 15000  // max dynamically allocated DRAM (15KB) https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/memory-types.html
+// #define RAM_LOG_ENABLED
+#define HISTORY_SIZE 10000  // max dynamically allocated DRAM (15KB) https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/memory-types.html
 #define HISTORY_INTERVAL 50 // ms between history updates
 #define LOG_SENSOR_COUNT 2  // Altitude, Vertical Velocity
 
 #define CSV_HEADER "time,altitude,z_velocity,airtemp,airpressure"
-
+// #define FLUSH_EVERY 1000
 fs::File logFile;
 fs::File eventsFile;
 fs::File dataFile;
 bool sdReady = false;
 bool flightFilesReady = false;
+#ifdef FLUSH_EVERY
+unsigned long flushCounterLog = 0;
+unsigned long flushCounterData = 0;
+unsigned long flushCounterEvents = 0;
+#endif
+char fmtBuffer[128] = ""; // Initialize the buffer as an empty string
 
 const unsigned long idleLedPattern[] = {
     LED_ON_SHORT,
@@ -96,6 +102,7 @@ const char *SSID = "CFlight";
 const char *psk = "there IS no sp00n";
 WiFiServer wifiServer(8080);
 WiFiClient ground_station;
+uint16_t flight_id = 0;
 #ifndef SIM_MODE
 MPU6050 accelgyro;   // I2C MPU6050 IMU
 Adafruit_BMP280 bmp; // I2C bmp280 barometer for altitude
@@ -206,6 +213,12 @@ inline void printlog(const T &value)
     Serial.print(value);
     if (flightFilesReady)
         logFile.print(value);
+        #ifdef FLUSH_EVERY
+        flushCounterLog++;
+        if (flushCounterLog >= FLUSH_EVERY) {
+            logFile.flush();
+        }
+        #endif
 }
 
 template <typename T>
@@ -214,6 +227,12 @@ inline void printlnlog(const T &value)
     Serial.println(value);
     if (flightFilesReady)
         logFile.println(value);
+        #ifdef FLUSH_EVERY
+        flushCounterLog++;
+        if (flushCounterLog >= FLUSH_EVERY) {
+            logFile.flush();
+        }
+        #endif
 }
 
 inline void printlnlog()
@@ -221,6 +240,12 @@ inline void printlnlog()
     Serial.println();
     if (flightFilesReady)
         logFile.println();
+        #ifdef FLUSH_EVERY
+        flushCounterLog++;
+        if (flushCounterLog >= FLUSH_EVERY) {
+            logFile.flush();
+        }
+        #endif
 }
 
 inline void printlog()
@@ -228,6 +253,12 @@ inline void printlog()
     Serial.println();
     if (flightFilesReady)
         logFile.println();
+        #ifdef FLUSH_EVERY
+        flushCounterLog++;
+        if (flushCounterLog >= FLUSH_EVERY) {
+            logFile.flush();
+        }
+        #endif
 }
 
 void printlogf(const char *format, ...)
@@ -246,15 +277,13 @@ void printlogf(const char *format, ...)
     // Check if the formatted string fits within the buffer
     if (formattedLength >= 0 && formattedLength < maxStringLength)
     {
-        // Print the formatted string to Serial
-        Serial.print(formattedString);
+        printlog(formattedString);
     }
     else
     {
         // Handle buffer overflow or formatting errors
         Serial.println("Error: Formatted string too long or other formatting error.");
     }
-
     // Cleanup the variable argument list
     va_end(args);
 }
@@ -267,7 +296,10 @@ void createDir(const char *path);
 void readFile(const char *path);
 void writeFile(const char *path, const char *message);
 void appendFile(const char *path, const char *message);
-void createFlightFiles(int16_t flight_id);
+uint16_t createFlightFiles(uint16_t flight_id);
+void initMetaData();
+uint16_t readFlightId();
+bool saveMetaData();
 void closeFlightFiles();
 void initErrorLoop();
 void allocateHistoryMemory();

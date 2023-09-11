@@ -113,17 +113,28 @@ void appendFile(const char *path, const char *message)
     file.close();
 }
 
-void createFlightFiles(int16_t flight_id)
+uint16_t createFlightFiles(uint16_t flight_id)
 {
     String pathName = "/" + String(flight_id);
+
+    if (SD.exists(pathName + "/flight.log"))
+    {
+        printlnlog("Error, flight ID already used, trying next");
+        return createFlightFiles(flight_id + 1);
+    }
     createDir(pathName.c_str());
     pathName += "/";
-    logFile = SD.open(pathName + "flight.log", FILE_WRITE);
-    logFile.printf("Flight {} log started", flight_id);
-    dataFile = SD.open(pathName + "flight.csv", FILE_WRITE);
-    dataFile.print(CSV_HEADER);
-    eventsFile = SD.open(pathName + "flight.events", FILE_WRITE);
-    eventsFile.printf("[{}] Flight files initalised", millis());
+    logFile = SD.open(pathName + "flight.log", FILE_APPEND);
+    logFile.printf("Flight %i log started\n", flight_id);
+    dataFile = SD.open(pathName + "flight.csv", FILE_APPEND);
+    dataFile.println(CSV_HEADER);
+    eventsFile = SD.open(pathName + "flight.events", FILE_APPEND);
+    eventsFile.println("Flight files initalised");
+    flightFilesReady = true;
+    logFile.flush();
+    dataFile.flush();
+    eventsFile.flush();
+    return flight_id;
 }
 
 void closeFlightFiles()
@@ -131,6 +142,7 @@ void closeFlightFiles()
     logFile.close();
     eventsFile.close();
     dataFile.close();
+    flightFilesReady = false;
 }
 
 void initErrorLoop()
@@ -269,7 +281,7 @@ void initWiFi()
 void initSD()
 {
     printlnlog("Init SD card");
-    if (!SD.begin())
+    if (!SD.begin(5, SPI, 4000000U, "/sd", 5, true))
     {
         printlnlog("Card Mount Failed");
         return;
@@ -304,6 +316,47 @@ void initSD()
     printlogf("SD Card Size: %lluMB\n", cardSize);
     printlogf("Total space: %lluMB\n", SD.totalBytes() / (1024 * 1024));
     printlogf("Used space: %lluMB\n", SD.usedBytes() / (1024 * 1024));
+    sdReady = true;
+}
+
+uint16_t readFlightId()
+{
+    if (SD.exists("/cflight.yaml"))
+    {
+        fs::File config = SD.open("/cflight.yaml", FILE_READ);
+        String line = "";
+        while (!line.startsWith("flightId:") && line != "EOF")
+        {
+            line = config.readStringUntil('\n');
+        }
+        if (line == "EOF")
+        {
+            return 0;
+        }
+        else
+        {
+            line.replace("flightId:", "");
+            return line.toInt();
+        }
+    }
+    else
+    {
+        saveMetaData();
+        return 0;
+    }
+}
+
+bool saveMetaData()
+{
+    fs::File file = SD.open("/cflight.yaml", FILE_WRITE);
+    if (!file)
+    {
+        printlnlog("Can't open file for writing");
+        return false;
+    }
+    file.printf("flightId:%i\n", flight_id);
+    file.close();
+    return true;
 }
 
 void setup()
@@ -318,18 +371,25 @@ void setup()
     initSD();
     initSensors();
     initWiFi();
+#ifdef RAM_LOG_ENABLED
     allocateHistoryMemory();
+#endif
+    flight_id = readFlightId() + 1;
     printlnlog("Boot complete!");
     previousTime = millis();
     currentTime = millis();
 #ifdef SIM_MODE
     commandCollector = "";
     printlnlog("Sim mode: awaiting packets");
-    commandCollector += Serial.readString();
+    while (commandCollector != "START")
+    {
+        commandCollector += Serial.readString();
+    }
     commandCollector = "";
     printlnlog("ACK");
     state = State::ARMED;
-
+    saveMetaData();
+    createFlightFiles(flight_id);
 #endif
 }
 
@@ -339,6 +399,7 @@ void logData()
     {
         if (lastHistoryEntry >= HISTORY_INTERVAL)
         {
+#ifdef RAM_LOG_ENABLED
             altitudeHistory[logIndex] = altitude;
             speedHistory[logIndex] = verticalVelocity;
             logIndex++;
@@ -347,6 +408,15 @@ void logData()
                 printlnlog("Log full!");
                 loggingData = false;
             }
+#endif
+            dataFile.printf("%i,%f,%f,%f,%f\n", currentTime, altitude, verticalVelocity, bmpTemperature, pressure);
+#ifdef FLUSH_EVERY
+            flushCounterData++;
+            if (flushCounterData >= FLUSH_EVERY)
+            {
+                dataFile.flush();
+            }
+#endif
         }
         lastHistoryEntry += deltaTime;
     }
@@ -425,15 +495,33 @@ bool firePyroCH(uint8_t channel)
     return true;
 }
 
+void eventEntry(char *s)
+{
+    eventsFile.printf("[%s] %s", formatTimestamp(currentTime), s);
+    eventsFile.println();
+#ifdef FLUSH_EVERY
+    flushCounterEvents++;
+    if (flushCounterEvents >= FLUSH_EVERY)
+    {
+        eventsFile.flush();
+    }
+#endif
+}
+
 void stateChange(State newState)
 {
-    printlog("State change ");
-    printlog(StateNames[(int)state]);
-    printlog(" -> ");
-    printlnlog(StateNames[(int)newState]);
+    sprintf(fmtBuffer, "State change %s -> %s", StateNames[(int)state], StateNames[(int)newState]);
+    printlnlog(fmtBuffer);
+    eventEntry(fmtBuffer);
+    fmtBuffer[0] = '\0';
     state = newState;
     stateChanged = 2; // State JUST changed
     // Update master arm
+    if (newState == State::ARMED)
+    {
+        saveMetaData();
+        createFlightFiles(flight_id);
+    }
     if (newState == State::LANDED || newState == State::CALIBRATE || newState == State::IDLE || newState == State::GROUNDSTATION)
     {
         masterArm = false;
@@ -457,16 +545,15 @@ void humanLogTimestamp(unsigned long timestamp)
 
 String formatTimestamp(unsigned long timestamp)
 {
-    unsigned long milliseconds = timestamp % 1000;
-    timestamp /= 1000;
-    unsigned long seconds = timestamp % 60;
-    timestamp /= 60;
-    unsigned long minutes = timestamp;
-
-    char formattedTime[12]; // Buffer for the formatted time string
+    unsigned long seconds = timestamp / 1000;
+    unsigned long minutes = seconds / 60;
+    timestamp %= 1000;
+    seconds %= 60;
+    minutes %= 60;
+    char formattedTime[16]; // Buffer for the formatted time string
 
     // Format the time components into the desired string format with leading zeros
-    snprintf(formattedTime, sizeof(formattedTime), "%02lu:%02lu.%03lu", minutes, seconds, milliseconds);
+    snprintf(formattedTime, sizeof(formattedTime), "%02lu:%02lu.%03lu", minutes, seconds, timestamp);
 
     return String(formattedTime);
 }
@@ -493,7 +580,7 @@ void report()
     printlog("Flight time: ");
     humanLogTimestamp(landingEventTimestamp - launchEventTimestamp);
     printlnlog();
-    printlnlog("-- Data --");
+    /*printlnlog("-- Data --");
     printlnlog("time,altitude,speed");
     for (int i = 0; i < finalLogIndex; i++)
     {
@@ -503,7 +590,7 @@ void report()
         printlog(",");
         printlog(speedHistory[i]);
         printlnlog();
-    }
+    }*/
     printlnlog("End of report");
 }
 
@@ -644,6 +731,8 @@ void tick()
             {
                 loggingData = false;
                 finalLogIndex = logIndex;
+                eventEntry("Landed, ending flight");
+                closeFlightFiles();
                 report();
             }
         }
@@ -847,7 +936,7 @@ void readCmd()
 #ifdef SIM_MODE
 
             long currentTimeT = Serial.parseInt();
-            if (currentTimeT != 0)
+            if (currentTimeT != 0 && currentTimeT > currentTime)
             {
                 currentTime = currentTimeT;
 
@@ -857,7 +946,7 @@ void readCmd()
 #endif
 
                 pressure = Serial.parseFloat();
-                if (initalPresure == 0)
+                if (initalPresure == 0 || initalPresure == nan)
                 {
                     initalPresure = pressure;
                 }
@@ -865,17 +954,11 @@ void readCmd()
                 printlog(" pressure: ");
                 printlog(pressure);
 #endif
-                gpsLatitude = Serial.parseFloat();
+                bmpTemperature = Serial.parseFloat();
 #ifdef DEBUG
-                printlog(", lat: ");
-                printlog(gpsLatitude);
+                printlog(", temp: ");
+                printlog(bmpTemperature);
 #endif
-                gpsLongitude = Serial.parseFloat();
-#ifdef DEBUG
-                printlog(", long: ");
-                printlnlog(gpsLongitude);
-#endif
-                gpsFix = true;
             }
 #endif
         }
@@ -972,33 +1055,11 @@ void handleWifi()
 }
 void minimalLog()
 {
-    // Minimal log over serial
-    printlog("[");
-    printlog(currentTime);
-    printlog("] Alt: ");
-    printlog(altitude);
-    printlog(", dAlt: ");
-    printlog(verticalVelocity);
-    printlog("m/s, Pressure: ");
-    printlog(pressure);
-    printlog(", Inital pressure: ");
-    printlog(initalPresure);
-    printlog(", gpsFix: ");
-    printlog(gpsFix ? "true" : "false");
-    //  printlog(", GPS satillites: ");
-    //  printlog(gpsSatilliteCount);
-    printlog(", lat: ");
-    printlog(gpsLatitude);
-    printlog(", long: ");
-    printlog(gpsLongitude);
-    //  printlog(", GPS alt: ");
-    //  printlog(gpsAltitude);
-    //  printlog(", GPS speed: ");
-    // printlog(gpsSpeed);
-    //  printlog(", GPS HDOP: ");
-    //  printlog(gpsHdop);
-    printlog(", State: ");
-    printlnlog(StateNames[(int)state]);
+    printlogf("[%s] ",
+              formatTimestamp(currentTime));
+    printlogf("Alt: %fm, ", altitude);
+    printlogf("dAlt: %fm/s, ", verticalVelocity);
+    printlogf("State: %s\n", StateNames[state]);
 }
 
 void loop()
