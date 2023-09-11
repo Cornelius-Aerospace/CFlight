@@ -1,5 +1,138 @@
 #include "main.h"
 
+void listDir(const char *dirname, uint8_t levels)
+{
+    printlogf("Listing directory: %s\n", dirname);
+
+    File root = SD.open(dirname);
+    if (!root)
+    {
+        printlnlog("Failed to open directory");
+        return;
+    }
+    if (!root.isDirectory())
+    {
+        printlnlog("Not a directory");
+        return;
+    }
+
+    File file = root.openNextFile();
+    while (file)
+    {
+        if (file.isDirectory())
+        {
+            printlog("  DIR : ");
+            printlnlog(file.name());
+            if (levels)
+            {
+                listDir(file.path(), levels - 1);
+            }
+        }
+        else
+        {
+            printlog("  FILE: ");
+            printlog(file.name());
+            printlog("  SIZE: ");
+            printlnlog(file.size());
+        }
+        file = root.openNextFile();
+    }
+}
+
+void createDir(const char *path)
+{
+    printlogf("Creating Dir: %s\n", path);
+    if (SD.mkdir(path))
+    {
+        printlnlog("Dir created");
+    }
+    else
+    {
+        printlnlog("mkdir failed");
+    }
+}
+
+void readFile(const char *path)
+{
+    printlogf("Reading file: %s\n", path);
+
+    File file = SD.open(path);
+    if (!file)
+    {
+        printlnlog("Failed to open file for reading");
+        return;
+    }
+
+    printlog("Read from file: ");
+    while (file.available())
+    {
+        Serial.write(file.read());
+    }
+    file.close();
+}
+
+void writeFile(const char *path, const char *message)
+{
+    printlogf("Writing file: %s\n", path);
+
+    File file = SD.open(path, FILE_WRITE);
+    if (!file)
+    {
+        printlnlog("Failed to open file for writing");
+        return;
+    }
+    if (file.print(message))
+    {
+        printlnlog("File written");
+    }
+    else
+    {
+        printlnlog("Write failed");
+    }
+    file.close();
+}
+
+void appendFile(const char *path, const char *message)
+{
+    printlogf("Appending to file: %s\n", path);
+
+    File file = SD.open(path, FILE_APPEND);
+    if (!file)
+    {
+        printlnlog("Failed to open file for appending");
+        return;
+    }
+    if (file.print(message))
+    {
+        printlnlog("Message appended");
+    }
+    else
+    {
+        printlnlog("Append failed");
+    }
+    file.close();
+}
+
+void createFlightFiles(int16_t flight_id)
+{
+    String pathName = "/" + String(flight_id);
+    createDir(pathName.c_str());
+    pathName += "/";
+    logFile = SD.open(pathName + "flight.log", FILE_WRITE);
+    logFile.printf("Flight {} log started", flight_id);
+    dataFile = SD.open(pathName + "flight.csv", FILE_WRITE);
+    dataFile.print(CSV_HEADER);
+    eventsFile = SD.open(pathName + "flight.events", FILE_WRITE);
+    eventsFile.printf("[{}] Flight files initalised", millis());
+}
+
+void closeFlightFiles()
+{
+    logFile.close();
+    eventsFile.close();
+    dataFile.close();
+}
+
 void initErrorLoop()
 {
     digitalWrite(ERROR_LED, HIGH);
@@ -15,26 +148,26 @@ void initErrorLoop()
 
 void allocateHistoryMemory()
 {
-    Serial.print("Allocating ");
-    Serial.print(HISTORY_SIZE * LOG_SENSOR_COUNT * sizeof(float));
-    Serial.print(" Bytes for history buffers with: ");
-    Serial.print(LOG_SENSOR_COUNT);
-    Serial.println(" sensors");
-    Serial.printf("\n\navailable heap befor allocating %i\n", ESP.getFreeHeap());
-    Serial.printf("biggest free block: %i\n", heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    printlog("Allocating ");
+    printlog(HISTORY_SIZE * LOG_SENSOR_COUNT * sizeof(float));
+    printlog(" Bytes for history buffers with: ");
+    printlog(LOG_SENSOR_COUNT);
+    printlnlog(" sensors");
+    printlogf("\n\navailable heap befor allocating %i\n", ESP.getFreeHeap());
+    printlogf("biggest free block: %i\n", heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     altitudeHistory = (float *)calloc(HISTORY_SIZE, sizeof(float));
     speedHistory = (float *)calloc(HISTORY_SIZE, sizeof(float));
-    Serial.printf("\n\navailable heap after allocating %i\n", ESP.getFreeHeap());
-    Serial.printf("biggest free block: %i\n", heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    printlogf("\n\navailable heap after allocating %i\n", ESP.getFreeHeap());
+    printlogf("biggest free block: %i\n", heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
 }
 
 void initSensors()
 {
 #ifndef SIM_MODE
-    Serial.println("Initializing I2C bus & devices...");
+    printlnlog("Initializing I2C bus & devices...");
     Wire.begin(SDA, SCL);
-    Serial.println("- Joined I2C bus");
-    Serial.println("(IMU):");
+    printlnlog("- Joined I2C bus");
+    printlnlog("(IMU):");
     accelgyro.initialize();
     accelgyro.setFullScaleAccelRange(3); // +-16g accel scale
 
@@ -42,10 +175,10 @@ void initSensors()
     mpu_state = accelgyro.testConnection();
     if (mpu_state)
     {
-        Serial.println("- Connected to MPU6050 (AxGy)");
+        printlnlog("- Connected to MPU6050 (AxGy)");
         if (useImuOffsets)
         {
-            Serial.println("- Setting IMU offsets...");
+            printlnlog("- Setting IMU offsets...");
             accelgyro.setXAccelOffset(axOffset);
             accelgyro.setYAccelOffset(ayOffset);
             accelgyro.setZAccelOffset(azOffset);
@@ -56,32 +189,32 @@ void initSensors()
     }
     else
     {
-        Serial.println("- Failed to connect to MPU6050!");
+        printlnlog("- Failed to connect to MPU6050!");
         initErrorLoop();
     }
-    Serial.println("(BMP):");
+    printlnlog("(BMP):");
     bmp_state = bmp.begin(BMP280_ADDRESS_ALT, BMP280_CHIPID);
     if (!bmp_state)
     {
-        Serial.println("- Failed to connect to BMP280!");
+        printlnlog("- Failed to connect to BMP280!");
         initErrorLoop();
     }
     else
     {
-        Serial.print("- Connected to BMP280! SensorID: 0x");
-        Serial.print(bmp.sensorID(), 16);
+        printlog("- Connected to BMP280! SensorID: 0x");
+        printlog(bmp.sensorID(), 16);
     }
-    Serial.println("- Setting BMP280 parameters...");
+    printlnlog("- Setting BMP280 parameters...");
     bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,   /* Operating Mode. */
                     Adafruit_BMP280::SAMPLING_X2,   /* Temp. oversampling */
                     Adafruit_BMP280::SAMPLING_X16,  /* Pressure oversampling */
                     Adafruit_BMP280::FILTER_X16,    /* Filtering. */
                     Adafruit_BMP280::STANDBY_MS_1); /* Standby time. */
 
-    Serial.println("- Done! BMP online");
-    Serial.println("Connecting to GPS...");
+    printlnlog("- Done! BMP online");
+    printlnlog("Connecting to GPS...");
     Serial2.begin(9600, SERIAL_8N1, GPS_RX, GPS_TX);
-    Serial.println("- Done! GPS online");
+    printlnlog("- Done! GPS online");
 #endif
 }
 
@@ -119,41 +252,82 @@ void pollGps()
     }
     if (currentTime > 5000 && gps.charsProcessed() < 10)
     {
-        // Serial.println("No GPS detected: check wiring.");
+        // printlnlog("No GPS detected: check wiring.");
     }
 #endif
 }
 
 void initWiFi()
 {
-    Serial.println("Starting AP");
+    printlnlog("Starting AP");
     WiFi.softAP(SSID, psk);
     IPAddress IP = WiFi.softAPIP();
-    Serial.print("- AP IP address: ");
-    Serial.println(IP);
+    printlog("- AP IP address: ");
+    printlnlog(IP);
+}
+
+void initSD()
+{
+    printlnlog("Init SD card");
+    if (!SD.begin())
+    {
+        printlnlog("Card Mount Failed");
+        return;
+    }
+    uint8_t cardType = SD.cardType();
+
+    if (cardType == CARD_NONE)
+    {
+        printlnlog("No SD card attached");
+        return;
+    }
+
+    printlog("SD Card Type: ");
+    if (cardType == CARD_MMC)
+    {
+        printlnlog("MMC");
+    }
+    else if (cardType == CARD_SD)
+    {
+        printlnlog("SDSC");
+    }
+    else if (cardType == CARD_SDHC)
+    {
+        printlnlog("SDHC");
+    }
+    else
+    {
+        printlnlog("UNKNOWN");
+    }
+
+    uint64_t cardSize = SD.cardSize() / (1024 * 1024);
+    printlogf("SD Card Size: %lluMB\n", cardSize);
+    printlogf("Total space: %lluMB\n", SD.totalBytes() / (1024 * 1024));
+    printlogf("Used space: %lluMB\n", SD.usedBytes() / (1024 * 1024));
 }
 
 void setup()
 {
     // initialize serial communication
     Serial.begin(115200);
-    Serial.println("CFlight v" + String(VERSION));
+    printlnlog("CFlight v" + String(VERSION));
     pinMode(STATUS_LED, OUTPUT);
     pinMode(ERROR_LED, OUTPUT);
     pinMode(BUZZER_PIN, OUTPUT);
     // initialize devices
+    initSD();
     initSensors();
     initWiFi();
     allocateHistoryMemory();
-    Serial.println("Boot complete!");
+    printlnlog("Boot complete!");
     previousTime = millis();
     currentTime = millis();
 #ifdef SIM_MODE
     commandCollector = "";
-    Serial.println("Sim mode: awaiting packets");
+    printlnlog("Sim mode: awaiting packets");
     commandCollector += Serial.readString();
     commandCollector = "";
-    Serial.println("ACK");
+    printlnlog("ACK");
     state = State::ARMED;
 
 #endif
@@ -170,7 +344,7 @@ void logData()
             logIndex++;
             if (logIndex >= HISTORY_SIZE)
             {
-                Serial.println("Log full!");
+                printlnlog("Log full!");
                 loggingData = false;
             }
         }
@@ -223,9 +397,9 @@ bool firePyroCH(uint8_t channel)
 {
     if (!masterArm)
     {
-        Serial.print("Refusing to fire pyro CH ");
-        Serial.print(channel);
-        Serial.println(", not armed!");
+        printlog("Refusing to fire pyro CH ");
+        printlog(channel);
+        printlnlog(", not armed!");
         return false;
     }
     // Master arm set, fire away!
@@ -245,18 +419,18 @@ bool firePyroCH(uint8_t channel)
         // Seccond stage motor channel
         stageChFired = true;
     }
-    Serial.print("Pyro CH ");
-    Serial.print(channel);
-    Serial.println(" fired");
+    printlog("Pyro CH ");
+    printlog(channel);
+    printlnlog(" fired");
     return true;
 }
 
 void stateChange(State newState)
 {
-    Serial.print("State change ");
-    Serial.print(StateNames[(int)state]);
-    Serial.print(" -> ");
-    Serial.println(StateNames[(int)newState]);
+    printlog("State change ");
+    printlog(StateNames[(int)state]);
+    printlog(" -> ");
+    printlnlog(StateNames[(int)newState]);
     state = newState;
     stateChanged = 2; // State JUST changed
     // Update master arm
@@ -272,13 +446,13 @@ void stateChange(State newState)
 
 void systemCheck()
 {
-    Serial.println("Begining systems check:");
+    printlnlog("Begining systems check:");
     // TODO systems check
 }
 
 void humanLogTimestamp(unsigned long timestamp)
 {
-    Serial.print(formatTimestamp(timestamp));
+    printlog(formatTimestamp(timestamp));
 }
 
 String formatTimestamp(unsigned long timestamp)
@@ -299,38 +473,38 @@ String formatTimestamp(unsigned long timestamp)
 
 void report()
 {
-    Serial.println("Flight Report: ");
-    Serial.print("Lift-off at: ");
+    printlnlog("Flight Report: ");
+    printlog("Lift-off at: ");
     humanLogTimestamp(launchEventTimestamp);
-    Serial.println();
-    Serial.print("Apogee: ");
-    Serial.print(peakAltitude);
-    Serial.print("m, At time: ");
+    printlnlog();
+    printlog("Apogee: ");
+    printlog(peakAltitude);
+    printlog("m, At time: ");
     humanLogTimestamp(apoggeeEventTimestamp);
-    Serial.println();
-    Serial.print("Max speed: ");
-    Serial.print(peakVerticalVelocity);
-    Serial.print("m/s, At time: ");
+    printlnlog();
+    printlog("Max speed: ");
+    printlog(peakVerticalVelocity);
+    printlog("m/s, At time: ");
     humanLogTimestamp(currentTime);
-    Serial.println();
-    Serial.print("Touchdown at: ");
+    printlnlog();
+    printlog("Touchdown at: ");
     humanLogTimestamp(landingEventTimestamp);
-    Serial.println();
-    Serial.print("Flight time: ");
+    printlnlog();
+    printlog("Flight time: ");
     humanLogTimestamp(landingEventTimestamp - launchEventTimestamp);
-    Serial.println();
-    Serial.println("-- Data --");
-    Serial.println("time,altitude,speed");
+    printlnlog();
+    printlnlog("-- Data --");
+    printlnlog("time,altitude,speed");
     for (int i = 0; i < finalLogIndex; i++)
     {
-        Serial.print(i * HISTORY_INTERVAL);
-        Serial.print(",");
-        Serial.print(altitudeHistory[i]);
-        Serial.print(",");
-        Serial.print(speedHistory[i]);
-        Serial.println();
+        printlog(i * HISTORY_INTERVAL);
+        printlog(",");
+        printlog(altitudeHistory[i]);
+        printlog(",");
+        printlog(speedHistory[i]);
+        printlnlog();
     }
-    Serial.println("End of report");
+    printlnlog("End of report");
 }
 
 void tick()
@@ -601,14 +775,14 @@ void updateOutputs()
 
 void saveFlight()
 {
-    Serial.println("Unimplemented");
+    printlnlog("Unimplemented");
 }
 
 Command parseCmd()
 {
     commandCollector.replace("\n", "");
-    Serial.print("Command: ");
-    Serial.println(commandCollector);
+    printlog("Command: ");
+    printlnlog(commandCollector);
 #ifndef SIM_MODE
 
     // 0: Toggle_dual_deployment, so on
@@ -640,7 +814,7 @@ Command parseCmd()
     {
         ESP.restart();
     }
-    Serial.println("Unknown command");
+    printlnlog("Unknown command");
     return Command::NONE;
 #endif
 
@@ -678,8 +852,8 @@ void readCmd()
                 currentTime = currentTimeT;
 
 #ifdef DEBUG
-                Serial.print("time: ");
-                Serial.print(currentTime);
+                printlog("time: ");
+                printlog(currentTime);
 #endif
 
                 pressure = Serial.parseFloat();
@@ -688,18 +862,18 @@ void readCmd()
                     initalPresure = pressure;
                 }
 #ifdef DEBUG
-                Serial.print(" pressure: ");
-                Serial.print(pressure);
+                printlog(" pressure: ");
+                printlog(pressure);
 #endif
                 gpsLatitude = Serial.parseFloat();
 #ifdef DEBUG
-                Serial.print(", lat: ");
-                Serial.print(gpsLatitude);
+                printlog(", lat: ");
+                printlog(gpsLatitude);
 #endif
                 gpsLongitude = Serial.parseFloat();
 #ifdef DEBUG
-                Serial.print(", long: ");
-                Serial.println(gpsLongitude);
+                printlog(", long: ");
+                printlnlog(gpsLongitude);
 #endif
                 gpsFix = true;
             }
@@ -719,14 +893,14 @@ void handleWifi()
     {
         String command = ground_station.readStringUntil('\n');
         command.replace("\n", "");
-        Serial.print("Command from ground station: ");
-        Serial.println(command);
+        printlog("Command from ground station: ");
+        printlnlog(command);
         // Split command into command and data
         // Format: command:data0,data1,data2,...,dataN;
         int colonIndex = command.indexOf(":");
         if (colonIndex == -1)
         {
-            Serial.println("Invalid command from ground station");
+            printlnlog("Invalid command from ground station");
             return;
         }
         String commandName = command.substring(0, colonIndex);
@@ -767,7 +941,7 @@ void handleWifi()
             // Data contains dual deploy details (eg dual deploy alt, drouge enabled, etc)
             if (dataIndex != 3)
             {
-                Serial.println("Invalid dual deploy command from ground station");
+                printlnlog("Invalid dual deploy command from ground station");
                 return;
             }
             dualDeploymentEnabled = commandData[0] == "1";
@@ -799,32 +973,32 @@ void handleWifi()
 void minimalLog()
 {
     // Minimal log over serial
-    Serial.print("[");
-    Serial.print(currentTime);
-    Serial.print("] Alt: ");
-    Serial.print(altitude);
-    Serial.print(", dAlt: ");
-    Serial.print(verticalVelocity);
-    Serial.print("m/s, Pressure: ");
-    Serial.print(pressure);
-    Serial.print(", Inital pressure: ");
-    Serial.print(initalPresure);
-    Serial.print(", gpsFix: ");
-    Serial.print(gpsFix ? "true" : "false");
-    //  Serial.print(", GPS satillites: ");
-    //  Serial.print(gpsSatilliteCount);
-    Serial.print(", lat: ");
-    Serial.print(gpsLatitude);
-    Serial.print(", long: ");
-    Serial.print(gpsLongitude);
-    //  Serial.print(", GPS alt: ");
-    //  Serial.print(gpsAltitude);
-    //  Serial.print(", GPS speed: ");
-    // Serial.print(gpsSpeed);
-    //  Serial.print(", GPS HDOP: ");
-    //  Serial.print(gpsHdop);
-    Serial.print(", State: ");
-    Serial.println(StateNames[(int)state]);
+    printlog("[");
+    printlog(currentTime);
+    printlog("] Alt: ");
+    printlog(altitude);
+    printlog(", dAlt: ");
+    printlog(verticalVelocity);
+    printlog("m/s, Pressure: ");
+    printlog(pressure);
+    printlog(", Inital pressure: ");
+    printlog(initalPresure);
+    printlog(", gpsFix: ");
+    printlog(gpsFix ? "true" : "false");
+    //  printlog(", GPS satillites: ");
+    //  printlog(gpsSatilliteCount);
+    printlog(", lat: ");
+    printlog(gpsLatitude);
+    printlog(", long: ");
+    printlog(gpsLongitude);
+    //  printlog(", GPS alt: ");
+    //  printlog(gpsAltitude);
+    //  printlog(", GPS speed: ");
+    // printlog(gpsSpeed);
+    //  printlog(", GPS HDOP: ");
+    //  printlog(gpsHdop);
+    printlog(", State: ");
+    printlnlog(StateNames[(int)state]);
 }
 
 void loop()
@@ -838,7 +1012,7 @@ void loop()
     if (wifiServer.hasClient() && !ground_station.connected())
     {
         ground_station = wifiServer.available();
-        Serial.println("New client");
+        printlnlog("New client");
         ground_station.println("connected");
     }
     pollImu();

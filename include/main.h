@@ -12,6 +12,9 @@
 #endif
 #include <Wire.h>
 #include "WiFi.h"
+#include "FS.h"
+#include "SD.h"
+#include "SPI.h"
 
 // #define DEBUG // Comment out to disable debug messages
 #define VERSION "0.2.0"
@@ -38,21 +41,29 @@
 #define LED_OFF_LONG 1000
 
 #define LAUNCH_DETECT_THRESHOLD 1.0 // Meters
-#define LAUNCH_DETECT_TICKS 5     // This many ticks for confirmed launch
+#define LAUNCH_DETECT_TICKS 5       // This many ticks for confirmed launch
 
 #define DESCENT_DETECT_THRESHOLD 1.0
 #define DESCENT_DETECT_TICKS 3
 
 #define LANDED_DETECT_THRESHOLD_LOW -0.3 // Meters
 #define LANDED_DETECT_THRESHOLD_HIGH 0.3 // Meters
-#define LANDED_DETECT_TICKS 20         // Number of ticks with subthreshold altitude change for landing event
+#define LANDED_DETECT_TICKS 20           // Number of ticks with subthreshold altitude change for landing event
 
-#define LOG_INTERVAL 50 // ms between (minimal) data log
+#define LOG_INTERVAL 50   // ms between (minimal) data log
 #define SPEED_INTERVAL 50 // ms between speed calculations
 
-#define HISTORY_SIZE 15000 // max dynamically allocated DRAM (15KB) https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/memory-types.html
+#define HISTORY_SIZE 15000  // max dynamically allocated DRAM (15KB) https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/memory-types.html
 #define HISTORY_INTERVAL 50 // ms between history updates
-#define LOG_SENSOR_COUNT 2 // Altitude, Vertical Velocity
+#define LOG_SENSOR_COUNT 2  // Altitude, Vertical Velocity
+
+#define CSV_HEADER "time,altitude,z_velocity,airtemp,airpressure"
+
+fs::File logFile;
+fs::File eventsFile;
+fs::File dataFile;
+bool sdReady = false;
+bool flightFilesReady = false;
 
 const unsigned long idleLedPattern[] = {
     LED_ON_SHORT,
@@ -74,21 +85,21 @@ const unsigned long groundLedPattern[] = {
     LED_OFF_LONG,
 };
 
-float* altitudeHistory;
-float* speedHistory;
+float *altitudeHistory;
+float *speedHistory;
 unsigned long logIndex = 0;
 unsigned long finalLogIndex = 0;
 unsigned long lastHistoryEntry = 0;
 bool loggingData = false;
 
-const char* SSID = "CFlight";
-const char* psk = "there IS no sp00n";
+const char *SSID = "CFlight";
+const char *psk = "there IS no sp00n";
 WiFiServer wifiServer(8080);
 WiFiClient ground_station;
 #ifndef SIM_MODE
 MPU6050 accelgyro;   // I2C MPU6050 IMU
 Adafruit_BMP280 bmp; // I2C bmp280 barometer for altitude
-TinyGPSPlus gps;    // Serial GPS
+TinyGPSPlus gps;     // Serial GPS
 
 bool mpu_state = false;
 bool bmp_state = false;
@@ -134,20 +145,20 @@ char *StateNames[] = {"IDLE", "CALIBRATE", "ARMED", "ASCENT", "DESCENT", "LANDED
 enum Command
 {
     // Settings related
-    TOGGLE_DUAL_DEPLOY, // 0
-    SET_DD_MAIN_ALT, // 1
+    TOGGLE_DUAL_DEPLOY,    // 0
+    SET_DD_MAIN_ALT,       // 1
     TOGGLE_DROUGE_ENABLED, // 2
-    TOGGLE_DEBUG,  // Toggle debug mode 3
-    UNARM,         // Return to idle (from armed) 4
-    ARM,           // Move to armed (from calibrate) 5
-    ENTER_CALIBRATE,     // Move to calibrate (from idle) 6
-    REPORT,        // Send systems report 7
-    SYSTEMCHECK,   // Perform systems check 8
-    TOGGLE_SOUND,   // Toggle buzzer manually 9
-    LOCATE,        // Report location only (gps coords) 10 
-    ENTER_GROUNDSTATION, // Enter GS mode (from any non flight mode) 11
-    ABORT,         // CATO/ perform emergancy procedures (depends on state) 12
-    NONE           // No command (default) 
+    TOGGLE_DEBUG,          // Toggle debug mode 3
+    UNARM,                 // Return to idle (from armed) 4
+    ARM,                   // Move to armed (from calibrate) 5
+    ENTER_CALIBRATE,       // Move to calibrate (from idle) 6
+    REPORT,                // Send systems report 7
+    SYSTEMCHECK,           // Perform systems check 8
+    TOGGLE_SOUND,          // Toggle buzzer manually 9
+    LOCATE,                // Report location only (gps coords) 10
+    ENTER_GROUNDSTATION,   // Enter GS mode (from any non flight mode) 11
+    ABORT,                 // CATO/ perform emergancy procedures (depends on state) 12
+    NONE                   // No command (default)
 };
 
 State state = State::IDLE;
@@ -162,8 +173,8 @@ Command activeCommand = Command::NONE;
 unsigned long commandData = 0; // Data passed with command
 
 uint16_t mainDeploymentAltitude = 150; // Altitude at which main chute deployed (0 to disable)
-bool drougeChuteEnabled = true;     // If true fire DrougeCH pyro at detect apogee
-bool dualDeploymentEnabled = true;  // If true wait for mainDeploymentAltitude and then fire DDMainCH
+bool drougeChuteEnabled = true;        // If true fire DrougeCH pyro at detect apogee
+bool dualDeploymentEnabled = true;     // If true wait for mainDeploymentAltitude and then fire DDMainCH
 
 bool drougeFired = false;    // set true after drouge pyro fired
 bool mainChuteFired = false; // Set true after dual deploy main chute fired
@@ -177,7 +188,7 @@ uint16_t ledPatternStage = 0;
 
 bool buzzerState = false;
 
-float initalPresure = 0;                                                      // Presure at launch pad
+float initalPresure = 0;                                                              // Presure at launch pad
 unsigned long launchEventTimestamp, apoggeeEventTimestamp, landingEventTimestamp = 0; // Time at which the events were detected
 unsigned long lastLogEvent = 0;
 
@@ -188,27 +199,98 @@ bool gpsFix = false;
 int32_t gpsHdop = 0;
 double gpsSpeed = 0;
 
+// Logging wrappers
+template <typename T>
+inline void printlog(const T &value)
+{
+    Serial.print(value);
+    if (flightFilesReady)
+        logFile.print(value);
+}
+
+template <typename T>
+inline void printlnlog(const T &value)
+{
+    Serial.println(value);
+    if (flightFilesReady)
+        logFile.println(value);
+}
+
+inline void printlnlog()
+{
+    Serial.println();
+    if (flightFilesReady)
+        logFile.println();
+}
+
+inline void printlog()
+{
+    Serial.println();
+    if (flightFilesReady)
+        logFile.println();
+}
+
+void printlogf(const char *format, ...)
+{
+    // Maximum length for the formatted string, adjust as needed
+    const int maxStringLength = 128;
+    char formattedString[maxStringLength];
+
+    // Initialize variable argument list
+    va_list args;
+    va_start(args, format);
+
+    // Format the string using vsnprintf
+    int formattedLength = vsnprintf(formattedString, maxStringLength, format, args);
+
+    // Check if the formatted string fits within the buffer
+    if (formattedLength >= 0 && formattedLength < maxStringLength)
+    {
+        // Print the formatted string to Serial
+        Serial.print(formattedString);
+    }
+    else
+    {
+        // Handle buffer overflow or formatting errors
+        Serial.println("Error: Formatted string too long or other formatting error.");
+    }
+
+    // Cleanup the variable argument list
+    va_end(args);
+}
+// End logging wrappers
 
 // Function prototypes
-void initSensors();
+void printlogf(const char *format, ...);
+void listDir(const char *dirname, uint8_t levels);
+void createDir(const char *path);
+void readFile(const char *path);
+void writeFile(const char *path, const char *message);
+void appendFile(const char *path, const char *message);
+void createFlightFiles(int16_t flight_id);
+void closeFlightFiles();
 void initErrorLoop();
-String formatTimestamp(unsigned long timestamp);
-
-
-// Tasks
+void allocateHistoryMemory();
+void initSensors();
+void pollGps();
+void initWiFi();
+void initSD();
+void setup();
 void logData();
 void pollImu();
 void pollBmp();
-void handleWifi();
-
-void minimalLog();
-void readCmd();
-void updateOutputs();
-void tick();
-void systemCheck();
-void stateChange(State newState);
 bool firePyroCH(uint8_t channel);
-
-void setup();
+void stateChange(State newState);
+void systemCheck();
+void humanLogTimestamp(unsigned long timestamp);
+String formatTimestamp(unsigned long timestamp);
+void report();
+void tick();
+void updateOutputs();
+void saveFlight();
+Command parseCmd();
+void readCmd();
+void handleWifi();
+void minimalLog();
 void loop();
 #endif
