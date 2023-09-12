@@ -1,6 +1,6 @@
 #ifndef MAIN_H
 #define MAIN_H
-#define SIM_MODE // comment out for physical use of sensors
+// #define SIM_MODE // comment out for physical use of sensors
 // Include libraries
 #include "I2Cdev.h"
 #ifndef SIM_MODE
@@ -15,6 +15,16 @@
 #include "SD.h"
 #include "SPI.h"
 #include <time.h>
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+    uint8_t temprature_sens_read();
+#ifdef __cplusplus
+}
+#endif
+uint8_t temprature_sens_read();
+
 #define DEBUG // Comment out to disable debug messages
 #define VERSION "0.2.0"
 
@@ -40,16 +50,16 @@
 #define LED_OFF_LONG 1000
 
 #define LAUNCH_DETECT_THRESHOLD 1.0 // Meters
-#define LAUNCH_DETECT_TICKS 5       // This many ticks for confirmed launch
+#define LAUNCH_DETECT_TICKS 10     // This many ticks for confirmed launch
 
 #define DESCENT_DETECT_THRESHOLD 1.0
-#define DESCENT_DETECT_TICKS 3
+#define DESCENT_DETECT_TICKS 10
 
-#define LANDED_DETECT_THRESHOLD_LOW -0.3 // Meters
-#define LANDED_DETECT_THRESHOLD_HIGH 0.3 // Meters
-#define LANDED_DETECT_TICKS 20           // Number of ticks with subthreshold altitude change for landing event
+#define LANDED_DETECT_THRESHOLD_LOW -0.4 // Meters
+#define LANDED_DETECT_THRESHOLD_HIGH 0.4 // Meters
+#define LANDED_DETECT_TICKS 500           // Number of ticks with subthreshold altitude change for landing event
 
-#define LOG_INTERVAL 50   // ms between (minimal) data log
+#define LOG_INTERVAL 1000 // ms between (minimal) data log
 #define SPEED_INTERVAL 50 // ms between speed calculations
 
 // #define RAM_LOG_ENABLED
@@ -58,7 +68,8 @@
 #define LOG_SENSOR_COUNT 2  // Altitude, Vertical Velocity
 
 #define CSV_HEADER "time,altitude,z_velocity,airtemp,airpressure"
-#define SD_CARD 
+// #define SD_CARD
+#define MAX_ARGS 8
 
 // #define FLUSH_EVERY 1000
 fs::File logFile;
@@ -154,27 +165,24 @@ char *StateNames[] = {"IDLE", "CALIBRATE", "ARMED", "ASCENT", "DESCENT", "LANDED
 enum Command
 {
     // Settings related
-    TOGGLE_DUAL_DEPLOY,    // 0
-    SET_DD_MAIN_ALT,       // 1
-    TOGGLE_DROUGE_ENABLED, // 2
-    TOGGLE_DEBUG,          // Toggle debug mode 3
-    UNARM,                 // Return to idle (from armed) 4
-    ARM,                   // Move to armed (from calibrate) 5
-    ENTER_CALIBRATE,       // Move to calibrate (from idle) 6
-    REPORT,                // Send systems report 7
-    SYSTEMCHECK,           // Perform systems check 8
-    TOGGLE_SOUND,          // Toggle buzzer manually 9
-    LOCATE,                // Report location only (gps coords) 10
-    ENTER_GROUNDSTATION,   // Enter GS mode (from any non flight mode) 11
-    ABORT,                 // CATO/ perform emergancy procedures (depends on state) 12
-    NONE                   // No command (default)
+    ARM, // 0
+    UNARM,
+    SET_FLIGHT,
+    SYSTEM_REPORT,
+    SET_BUZZER,
+    BATTERY_CHECK,
+    SLEEP,
+    POWER_DOWN,
+    READ_FLIGHT,
+    NONE // No command (default)
 };
 
 State state = State::IDLE;
 int stateChanged = 0; // Has the state changed since last tick(); (0 - no, 1 - yes, 2 - state changing this tick (ignore))
 String commandCollector = "";
 
-char* 
+String commandTypeHolder = "";
+String commandArgs[MAX_ARGS] = {};
 
 uint16_t launchDetectTicker = 0;
 uint16_t descentTicker = 0;
@@ -217,12 +225,13 @@ inline void printlog(const T &value)
     Serial.print(value);
     if (flightFilesReady)
         logFile.print(value);
-        #ifdef FLUSH_EVERY
-        flushCounterLog++;
-        if (flushCounterLog >= FLUSH_EVERY) {
-            logFile.flush();
-        }
-        #endif
+#ifdef FLUSH_EVERY
+    flushCounterLog++;
+    if (flushCounterLog >= FLUSH_EVERY)
+    {
+        logFile.flush();
+    }
+#endif
 }
 
 template <typename T>
@@ -231,12 +240,13 @@ inline void printlnlog(const T &value)
     Serial.println(value);
     if (flightFilesReady)
         logFile.println(value);
-        #ifdef FLUSH_EVERY
-        flushCounterLog++;
-        if (flushCounterLog >= FLUSH_EVERY) {
-            logFile.flush();
-        }
-        #endif
+#ifdef FLUSH_EVERY
+    flushCounterLog++;
+    if (flushCounterLog >= FLUSH_EVERY)
+    {
+        logFile.flush();
+    }
+#endif
 }
 
 inline void printlnlog()
@@ -244,12 +254,13 @@ inline void printlnlog()
     Serial.println();
     if (flightFilesReady)
         logFile.println();
-        #ifdef FLUSH_EVERY
-        flushCounterLog++;
-        if (flushCounterLog >= FLUSH_EVERY) {
-            logFile.flush();
-        }
-        #endif
+#ifdef FLUSH_EVERY
+    flushCounterLog++;
+    if (flushCounterLog >= FLUSH_EVERY)
+    {
+        logFile.flush();
+    }
+#endif
 }
 
 inline void printlog()
@@ -257,19 +268,20 @@ inline void printlog()
     Serial.println();
     if (flightFilesReady)
         logFile.println();
-        #ifdef FLUSH_EVERY
-        flushCounterLog++;
-        if (flushCounterLog >= FLUSH_EVERY) {
-            logFile.flush();
-        }
-        #endif
+#ifdef FLUSH_EVERY
+    flushCounterLog++;
+    if (flushCounterLog >= FLUSH_EVERY)
+    {
+        logFile.flush();
+    }
+#endif
 }
+const int maxStringLength = 256;
+char formattedString[maxStringLength];
 
 void printlogf(const char *format, ...)
 {
     // Maximum length for the formatted string, adjust as needed
-    const int maxStringLength = 128;
-    char formattedString[maxStringLength];
 
     // Initialize variable argument list
     va_list args;
@@ -289,6 +301,7 @@ void printlogf(const char *format, ...)
         Serial.println("Error: Formatted string too long or other formatting error.");
     }
     // Cleanup the variable argument list
+    formattedString[0] = '\0';
     va_end(args);
 }
 // End logging wrappers
@@ -321,9 +334,12 @@ void systemCheck();
 void humanLogTimestamp(unsigned long timestamp);
 String formatTimestamp(unsigned long timestamp);
 void report();
+void systemReport();
+
 void tick();
 void updateOutputs();
 void saveFlight();
+bool parseCmdArgs(int expectedArgs);
 Command parseCmd();
 void readCmd();
 void handleWifi();

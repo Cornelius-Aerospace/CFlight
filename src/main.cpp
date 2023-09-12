@@ -255,7 +255,7 @@ void initSensors()
     else
     {
         printlog("- Connected to BMP280! SensorID: 0x");
-        printlog(bmp.sensorID(), 16);
+        printlogf("%h", bmp.sensorID());
     }
     printlnlog("- Setting BMP280 parameters...");
     bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,   /* Operating Mode. */
@@ -322,9 +322,9 @@ void initWiFi()
 uint16_t readFlightId()
 {
 #ifndef SD_CARD
-    return 0
-#endif
-        if (SD.exists("/cflight.yaml"))
+    return 0;
+#else
+    if (SD.exists("/cflight.yaml"))
     {
         fs::File config = SD.open("/cflight.yaml", FILE_READ);
         String line = "";
@@ -347,6 +347,7 @@ uint16_t readFlightId()
         saveMetaData();
         return 0;
     }
+#endif
 }
 
 bool saveMetaData()
@@ -529,8 +530,10 @@ void stateChange(State newState)
     // Update master arm
     if (newState == State::ARMED)
     {
+        #ifdef SD_CARD
         saveMetaData();
         createFlightFiles(flight_id);
+        #endif
     }
     if (newState == State::LANDED || newState == State::CALIBRATE || newState == State::IDLE || newState == State::GROUNDSTATION)
     {
@@ -604,6 +607,35 @@ void report()
     printlnlog("End of report");
 }
 
+float cpuTemp()
+{
+    return (temprature_sens_read() - 32) / 1.8;
+}
+
+void systemReport()
+{
+    printlnlog("- System Report -");
+    printlogf("GPS. Sat Fix: %s, Sat count: %i,", gpsFix ? "YES" : "NO", gpsSatilliteCount);
+    printlogf(" HDOP: %i, ", gpsHdop);
+    if (gpsFix)
+    {
+        printlogf("Lat: %f, Long: %f, Speed: %f", gpsLatitude, gpsLongitude, gpsSpeed);
+    }
+    printlnlog();
+
+    printlogf("BMP. State: %s,", bmp_state ? "OK" : "ERROR");
+    printlogf(" Pressure: %fMPa, Temperature: %f°C,", pressure, bmpTemperature);
+    printlogf(" Altitude: %fm, Base Pressure: %fMPa\n", altitude, initalPresure);
+
+    printlogf("IMU. State: %s, ", mpu_state ? "OK" : "ERROR");
+    printlogf("Ax: %i Ay: %i Az: %i, ", ax, ay, az);
+    printlogf("Gx: %i Gy: %i Gz: %i\n", gx, gy, gz);
+
+    printlogf("Device. Cpu Temperature %f, State: ", cpuTemp(), StateNames[state]);
+    printlogf("SD card. State: %s \n", sdReady ? "READY" : "ERROR");
+    // TODO: reset of stats
+}
+
 void tick()
 {
     if (stateChanged != 0)
@@ -611,32 +643,24 @@ void tick()
         stateChanged--;
     }
 
-    if (activeCommand == Command::TOGGLE_SOUND)
+    if (activeCommand == Command::SET_BUZZER)
     {
-        buzzerState = !buzzerState;
+        buzzerState = commandArgs[0] == "1";
+    }
+    else if (activeCommand == Command::SYSTEM_REPORT)
+    {
+        systemReport();
     }
     if (state == State::IDLE)
     {
-        if (activeCommand == Command::SYSTEMCHECK)
-        {
-            systemCheck();
-        }
 
-        else if (activeCommand == Command::TOGGLE_DROUGE_ENABLED)
-        {
-            drougeChuteEnabled = !drougeChuteEnabled;
-        }
-        else if (activeCommand == Command::TOGGLE_DUAL_DEPLOY)
-        {
-            dualDeploymentEnabled = !dualDeploymentEnabled;
-        }
-        if (stateChanged == 1 && !calibrate_done)
+        if (stateChanged == 1)
         {
             initalPresure = pressure; // First tick in cal mode, set initalPressure
         }
         else
         {
-            calibrate_done = true;
+            calibrate_done = true; // ?
             // Add current to inital presure & divide by two ("running" avgerage) [TODO: check this]
             initalPresure += pressure;
             initalPresure /= 2;
@@ -645,9 +669,17 @@ void tick()
         {
             stateChange(State::ARMED);
         }
-        else if (activeCommand == Command::UNARM)
+        else if (activeCommand == Command::SET_FLIGHT)
         {
-            stateChange(State::IDLE);
+
+            drougeChuteEnabled = commandArgs[0] == "1";
+            dualDeploymentEnabled = commandArgs[1] == "1";
+            mainDeploymentAltitude = commandArgs[2].toInt();
+            printlogf("Set flight config: Dual Deploy: %s, Drouge Deploy: %s, Main Deploy Alt: %s\n",
+                      dualDeploymentEnabled ? "YES" : "NO",
+                      drougeChuteEnabled ? "YES" : "NO",
+                      dualDeploymentEnabled ? String(mainDeploymentAltitude) : "N/A");
+            activeCommand = Command::NONE;
         }
     }
     else
@@ -737,12 +769,14 @@ void tick()
         else if (state == State::LANDED)
         {
 
-            if (activeCommand == Command::REPORT || stateChanged == 1)
+            if (stateChanged == 1)
             {
                 loggingData = false;
                 finalLogIndex = logIndex;
+                #ifdef SD_CARD
                 eventEntry("Landed, ending flight");
                 closeFlightFiles();
+                #endif
                 report();
             }
         }
@@ -876,45 +910,85 @@ void saveFlight()
 {
     printlnlog("Unimplemented");
 }
+bool parseCmdArgs(int expectedArgs)
+{
+    if (expectedArgs > MAX_ARGS)
+        return false;
+    for (int i = 0; i < MAX_ARGS; i++)
+        commandArgs[i] = "";
+    int commandIndex = 0;
+    int commaIndex = 0;
+    while (commandIndex != expectedArgs)
+    {
+        commaIndex = 0;
+        for (int i = 0; i < commandCollector.length(); i++)
+        {
+            if (commandCollector[i] == ',')
+            {
+                commaIndex = i;
+                break;
+            }
+            else if (commandCollector[i] == ';' && commandIndex == expectedArgs - 1)
+            {
+                commaIndex = i;
+                break;
+            }
+        }
+        if (commaIndex == 0)
+        {
+            return false;
+        }
+        commandArgs[commandIndex] = commandCollector.substring(0, commaIndex);
+        commandCollector = commandCollector.substring(commaIndex + 1);
+        commandIndex++;
+    }
+    return true;
+}
 
 Command parseCmd()
 {
-    commandCollector.replace("\n", "");
-    printlog("Command: ");
-    printlnlog(commandCollector);
 #ifndef SIM_MODE
 
+    int colonIndex = 0;
+    for (int i = 0; i < commandCollector.length(); i++)
+    {
+        if (commandCollector[i] == ':')
+        {
+            colonIndex = i;
+            break;
+        }
+    }
+    if (colonIndex == 0)
+    {
+        printlnlog("Invalid command (no colon)");
+        return Command::NONE;
+    }
+    commandTypeHolder = commandCollector.substring(0, colonIndex);
+    commandCollector = commandCollector.substring(colonIndex + 1);
+    if (commandTypeHolder == "-1") ESP.restart();
     // 0: Toggle_dual_deployment, so on
-    if (commandCollector == "ARM")
+    if (commandTypeHolder == "0")
         return Command::ARM;
-    if (commandCollector == "UNARM")
+    if (commandTypeHolder == "1")
         return Command::UNARM;
-    if (commandCollector == "CALI")
-        return Command::ENTER_CALIBRATE;
-    if (commandCollector == "BEEP")
-        return Command::TOGGLE_SOUND;
-    if (commandCollector == "TDUAL")
-        return Command::TOGGLE_DUAL_DEPLOY;
-    if (commandCollector == "TDROUGE")
-        return Command::TOGGLE_DROUGE_ENABLED;
-    if (commandCollector == "REPORT")
-        return Command::REPORT;
-    if (commandCollector == "SCHECK")
-        return Command::SYSTEMCHECK;
-    if (commandCollector == "LOCATE")
-        return Command::LOCATE;
-    if (commandCollector == "GNDST")
-        return Command::ENTER_GROUNDSTATION;
-    if (commandCollector == "SAVE")
+    if (commandTypeHolder == "2" && parseCmdArgs(3))
     {
-        saveFlight();
+        return Command::SET_FLIGHT;
     }
-    if (commandCollector == "RST")
+
+    if (commandTypeHolder == "3")
+        return Command::SYSTEM_REPORT;
+    if (commandTypeHolder == "4" && parseCmdArgs(1))
     {
-        ESP.restart();
+        return Command::SET_BUZZER;
     }
-    printlnlog("Unknown command");
-    return Command::NONE;
+    if (commandTypeHolder == "5")
+        return Command::SLEEP;
+    if (commandTypeHolder == "6")
+        return Command::POWER_DOWN;
+    if (commandTypeHolder == "7" && parseCmdArgs(1))
+        return Command::READ_FLIGHT;
+    printlnlog("Unknown command or malformed arguments");
 #endif
 
     return Command::NONE;
@@ -933,8 +1007,9 @@ void readCmd()
 #ifndef SIM_MODE
             char c = Serial.read();
             commandCollector += c;
-            if (commandCollector.endsWith("\n"))
+            if (c == '\n')
             {
+                commandCollector = commandCollector.substring(0, commandCollector.length() - 1);
                 activeCommand = parseCmd();
                 commandCollector = "";
             }
@@ -982,86 +1057,7 @@ void readCmd()
 void handleWifi()
 {
     // Is there any data from the ground station?
-    if (ground_station.available() > 0)
-    {
-        String command = ground_station.readStringUntil('\n');
-        command.replace("\n", "");
-        printlog("Command from ground station: ");
-        printlnlog(command);
-        // Split command into command and data
-        // Format: command:data0,data1,data2,...,dataN;
-        int colonIndex = command.indexOf(":");
-        if (colonIndex == -1)
-        {
-            printlnlog("Invalid command from ground station");
-            return;
-        }
-        String commandName = command.substring(0, colonIndex);
-        char *commandData[4];
-        int dataIndex = 0;
-        if (colonIndex + commandName.length() != command.length() - 1)
-        {
-            int lastCommaIndex = colonIndex;
-            for (int i = colonIndex + 1; i < command.length(); i++)
-            {
-                if (command.charAt(i) == ',')
-                {
-                    commandData[dataIndex] = (char *)command.substring(lastCommaIndex + 1, i).c_str();
-                    dataIndex++;
-                    lastCommaIndex = i;
-                }
-                else if (command.charAt(i) == ';')
-                {
-                    commandData[dataIndex] = (char *)command.substring(lastCommaIndex + 1, i).c_str();
-                    break;
-                }
-            }
-        }
-        if (commandName == "arm")
-        {
-            activeCommand = Command::ARM;
-        }
-        else if (commandName == "unarm")
-        {
-            activeCommand = Command::UNARM;
-        }
-        else if (commandName == "calibrate")
-        {
-            activeCommand = Command::ENTER_CALIBRATE;
-        }
-        else if (commandName == "dual_deploy")
-        {
-            // Data contains dual deploy details (eg dual deploy alt, drouge enabled, etc)
-            if (dataIndex != 3)
-            {
-                printlnlog("Invalid dual deploy command from ground station");
-                return;
-            }
-            dualDeploymentEnabled = commandData[0] == "1";
-            drougeChuteEnabled = commandData[1] == "1";
-            mainDeploymentAltitude = atoi(commandData[2]);
-        }
-        else if (commandName == "calibrate")
-        {
-            activeCommand = Command::ENTER_CALIBRATE;
-        }
-        else if (commandName == "system_check")
-        {
-            activeCommand = Command::SYSTEMCHECK;
-        }
-        else if (commandName == "locate")
-        {
-            activeCommand = Command::LOCATE;
-        }
-        else if (commandName == "report")
-        {
-            activeCommand = Command::REPORT;
-        }
-        else if (commandName == "beep")
-        {
-            activeCommand = Command::TOGGLE_SOUND;
-        }
-    }
+    // TODO
 }
 void minimalLog()
 {
