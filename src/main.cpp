@@ -1,5 +1,5 @@
 #include "main.h"
-
+#ifdef SD_CARD
 void listDir(const char *dirname, uint8_t levels)
 {
     printlogf("Listing directory: %s\n", dirname);
@@ -144,7 +144,48 @@ void closeFlightFiles()
     dataFile.close();
     flightFilesReady = false;
 }
+void initSD()
+{
+    printlnlog("Init SD card");
+    if (!SD.begin(5, SPI, 4000000U, "/sd", 5, true))
+    {
+        printlnlog("Card Mount Failed");
+        return;
+    }
+    uint8_t cardType = SD.cardType();
 
+    if (cardType == CARD_NONE)
+    {
+        printlnlog("No SD card attached");
+        return;
+    }
+
+    printlog("SD Card Type: ");
+    if (cardType == CARD_MMC)
+    {
+        printlnlog("MMC");
+    }
+    else if (cardType == CARD_SD)
+    {
+        printlnlog("SDSC");
+    }
+    else if (cardType == CARD_SDHC)
+    {
+        printlnlog("SDHC");
+    }
+    else
+    {
+        printlnlog("UNKNOWN");
+    }
+
+    uint64_t cardSize = SD.cardSize() / (1024 * 1024);
+    printlogf("SD Card Size: %lluMB\n", cardSize);
+    printlogf("Total space: %lluMB\n", SD.totalBytes() / (1024 * 1024));
+    printlogf("Used space: %lluMB\n", SD.usedBytes() / (1024 * 1024));
+    sdReady = true;
+}
+
+#endif
 void initErrorLoop()
 {
     digitalWrite(ERROR_LED, HIGH);
@@ -278,50 +319,12 @@ void initWiFi()
     printlnlog(IP);
 }
 
-void initSD()
-{
-    printlnlog("Init SD card");
-    if (!SD.begin(5, SPI, 4000000U, "/sd", 5, true))
-    {
-        printlnlog("Card Mount Failed");
-        return;
-    }
-    uint8_t cardType = SD.cardType();
-
-    if (cardType == CARD_NONE)
-    {
-        printlnlog("No SD card attached");
-        return;
-    }
-
-    printlog("SD Card Type: ");
-    if (cardType == CARD_MMC)
-    {
-        printlnlog("MMC");
-    }
-    else if (cardType == CARD_SD)
-    {
-        printlnlog("SDSC");
-    }
-    else if (cardType == CARD_SDHC)
-    {
-        printlnlog("SDHC");
-    }
-    else
-    {
-        printlnlog("UNKNOWN");
-    }
-
-    uint64_t cardSize = SD.cardSize() / (1024 * 1024);
-    printlogf("SD Card Size: %lluMB\n", cardSize);
-    printlogf("Total space: %lluMB\n", SD.totalBytes() / (1024 * 1024));
-    printlogf("Used space: %lluMB\n", SD.usedBytes() / (1024 * 1024));
-    sdReady = true;
-}
-
 uint16_t readFlightId()
 {
-    if (SD.exists("/cflight.yaml"))
+#ifndef SD_CARD
+    return 0
+#endif
+        if (SD.exists("/cflight.yaml"))
     {
         fs::File config = SD.open("/cflight.yaml", FILE_READ);
         String line = "";
@@ -367,8 +370,10 @@ void setup()
     pinMode(STATUS_LED, OUTPUT);
     pinMode(ERROR_LED, OUTPUT);
     pinMode(BUZZER_PIN, OUTPUT);
-    // initialize devices
+// initialize devices
+#ifdef SD_CARD
     initSD();
+#endif
     initSensors();
     initWiFi();
 #ifdef RAM_LOG_ENABLED
@@ -381,7 +386,7 @@ void setup()
 #ifdef SIM_MODE
     commandCollector = "";
     printlnlog("Sim mode: awaiting packets");
-    while (commandCollector != "START")
+    while (commandCollector != "START\n")
     {
         commandCollector += Serial.readString();
     }
@@ -409,7 +414,12 @@ void logData()
                 loggingData = false;
             }
 #endif
-            dataFile.printf("%i,%f,%f,%f,%f\n", currentTime, altitude, verticalVelocity, bmpTemperature, pressure);
+#ifdef SD_CARD
+            if (flightFilesReady)
+            {
+                dataFile.printf("%i,%f,%f,%f,%f\n", currentTime, altitude, verticalVelocity, bmpTemperature, pressure);
+            }
+#endif
 #ifdef FLUSH_EVERY
             flushCounterData++;
             if (flushCounterData >= FLUSH_EVERY)
@@ -946,7 +956,7 @@ void readCmd()
 #endif
 
                 pressure = Serial.parseFloat();
-                if (initalPresure == 0 || initalPresure == nan)
+                if (initalPresure == 0 || !isinff(pressure) && !isnanf(pressure))
                 {
                     initalPresure = pressure;
                 }

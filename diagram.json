@@ -1,0 +1,27 @@
+{
+    "version": 1,
+    "author": "Leah Cornelius",
+    "editor": "wokwi",
+    "parts": [
+      { "type": "wokwi-esp32-devkit-v1", "id": "esp", "top": 1.33, "left": -94.67, "attrs": {} },
+      {
+        "type": "wokwi-microsd-card",
+        "id": "sd1",
+        "top": 34.9,
+        "left": 177.42,
+        "rotate": 180,
+        "attrs": {}
+      }
+    ],
+    "connections": [
+      [ "esp:TX0", "$serialMonitor:RX", "", [] ],
+      [ "esp:RX0", "$serialMonitor:TX", "", [] ],
+      [ "sd1:CS", "esp:D5", "green", [ "v27.41", "h-74.99", "v0.07" ] ],
+      [ "sd1:DI", "esp:D23", "green", [ "h-151.66", "v51.62" ] ],
+      [ "sd1:VCC", "esp:3V3", "red", [ "h-112.33", "v195.95" ] ],
+      [ "sd1:SCK", "esp:D18", "green", [ "h-130.99", "v128.6" ] ],
+      [ "sd1:GND", "esp:GND.1", "black", [ "h-132.19", "v59.89" ] ],
+      [ "sd1:DO", "esp:D19", "green", [ "h-160.99", "v138.42" ] ]
+    ],
+    "dependencies": {}
+  }

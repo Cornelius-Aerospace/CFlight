@@ -58,6 +58,8 @@
 #define LOG_SENSOR_COUNT 2  // Altitude, Vertical Velocity
 
 #define CSV_HEADER "time,altitude,z_velocity,airtemp,airpressure"
+#define SD_CARD 
+
 // #define FLUSH_EVERY 1000
 fs::File logFile;
 fs::File eventsFile;
@@ -171,6 +173,8 @@ enum Command
 State state = State::IDLE;
 int stateChanged = 0; // Has the state changed since last tick(); (0 - no, 1 - yes, 2 - state changing this tick (ignore))
 String commandCollector = "";
+
+char* 
 
 uint16_t launchDetectTicker = 0;
 uint16_t descentTicker = 0;
