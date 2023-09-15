@@ -57,7 +57,7 @@ uint8_t temprature_sens_read();
 
 #define LANDED_DETECT_THRESHOLD_LOW -0.4 // Meters
 #define LANDED_DETECT_THRESHOLD_HIGH 0.4 // Meters
-#define LANDED_DETECT_TICKS 500           // Number of ticks with subthreshold altitude change for landing event
+#define LANDED_DETECT_TICKS 100           // Number of ticks with subthreshold altitude change for landing event
 
 #define LOG_INTERVAL 1000 // ms between (minimal) data log
 #define SPEED_INTERVAL 50 // ms between speed calculations
