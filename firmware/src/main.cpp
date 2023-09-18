@@ -186,18 +186,6 @@ void initSD()
 }
 
 #endif
-void initErrorLoop()
-{
-    digitalWrite(ERROR_LED, HIGH);
-    bool toggler = false;
-    while (true)
-    {
-        digitalWrite(STATUS_LED, toggler);
-        digitalWrite(BUZZER_PIN, toggler);
-        toggler = !toggler;
-        delay(500);
-    }
-}
 
 void allocateHistoryMemory()
 {
@@ -310,15 +298,6 @@ void pollGps()
 #endif
 }
 
-void initWiFi()
-{
-    printlnlog("Starting AP");
-    WiFi.softAP(SSID, psk);
-    IPAddress IP = WiFi.softAPIP();
-    printlog("- AP IP address: ");
-    printlnlog(IP);
-}
-
 uint16_t readFlightId()
 {
 #ifndef SD_CARD
@@ -376,7 +355,7 @@ void setup()
     initSD();
 #endif
     initSensors();
-    initWiFi();
+    initComms();
 #ifdef RAM_LOG_ENABLED
     allocateHistoryMemory();
 #endif
@@ -530,10 +509,10 @@ void stateChange(State newState)
     // Update master arm
     if (newState == State::ARMED)
     {
-        #ifdef SD_CARD
+#ifdef SD_CARD
         saveMetaData();
         createFlightFiles(flight_id);
-        #endif
+#endif
     }
     if (newState == State::LANDED || newState == State::CALIBRATE || newState == State::IDLE || newState == State::GROUNDSTATION)
     {
@@ -672,9 +651,11 @@ void tick()
         else if (activeCommand == Command::SET_FLIGHT)
         {
 
-            drougeChuteEnabled = commandArgs[0] == "1";
-            dualDeploymentEnabled = commandArgs[1] == "1";
-            mainDeploymentAltitude = commandArgs[2].toInt();
+            drougeChuteEnabled = commandArgBuffer[0] == 1;
+            dualDeploymentEnabled = commandArgBuffer[1] == 1;
+            // mainDeploymentAltitude is uint16_t, so we need to combine the two bytes
+            mainDeploymentAltitude = (commandArgBuffer[2] << 8) || commandArgs[3];
+
             printlogf("Set flight config: Dual Deploy: %s, Drouge Deploy: %s, Main Deploy Alt: %s\n",
                       dualDeploymentEnabled ? "YES" : "NO",
                       drougeChuteEnabled ? "YES" : "NO",
@@ -773,10 +754,10 @@ void tick()
             {
                 loggingData = false;
                 finalLogIndex = logIndex;
-                #ifdef SD_CARD
+#ifdef SD_CARD
                 eventEntry("Landed, ending flight");
                 closeFlightFiles();
-                #endif
+#endif
                 report();
             }
         }
@@ -910,155 +891,7 @@ void saveFlight()
 {
     printlnlog("Unimplemented");
 }
-bool parseCmdArgs(int expectedArgs)
-{
-    if (expectedArgs > MAX_ARGS)
-        return false;
-    for (int i = 0; i < MAX_ARGS; i++)
-        commandArgs[i] = "";
-    int commandIndex = 0;
-    int commaIndex = 0;
-    while (commandIndex != expectedArgs)
-    {
-        commaIndex = 0;
-        for (int i = 0; i < commandCollector.length(); i++)
-        {
-            if (commandCollector[i] == ',')
-            {
-                commaIndex = i;
-                break;
-            }
-            else if (commandCollector[i] == ';' && commandIndex == expectedArgs - 1)
-            {
-                commaIndex = i;
-                break;
-            }
-        }
-        if (commaIndex == 0)
-        {
-            return false;
-        }
-        commandArgs[commandIndex] = commandCollector.substring(0, commaIndex);
-        commandCollector = commandCollector.substring(commaIndex + 1);
-        commandIndex++;
-    }
-    return true;
-}
 
-Command parseCmd()
-{
-#ifndef SIM_MODE
-
-    int colonIndex = 0;
-    for (int i = 0; i < commandCollector.length(); i++)
-    {
-        if (commandCollector[i] == ':')
-        {
-            colonIndex = i;
-            break;
-        }
-    }
-    if (colonIndex == 0)
-    {
-        printlnlog("Invalid command (no colon)");
-        return Command::NONE;
-    }
-    commandTypeHolder = commandCollector.substring(0, colonIndex);
-    commandCollector = commandCollector.substring(colonIndex + 1);
-    if (commandTypeHolder == "-1") ESP.restart();
-    // 0: Toggle_dual_deployment, so on
-    if (commandTypeHolder == "0")
-        return Command::ARM;
-    if (commandTypeHolder == "1")
-        return Command::UNARM;
-    if (commandTypeHolder == "2" && parseCmdArgs(3))
-    {
-        return Command::SET_FLIGHT;
-    }
-
-    if (commandTypeHolder == "3")
-        return Command::SYSTEM_REPORT;
-    if (commandTypeHolder == "4" && parseCmdArgs(1))
-    {
-        return Command::SET_BUZZER;
-    }
-    if (commandTypeHolder == "5")
-        return Command::SLEEP;
-    if (commandTypeHolder == "6")
-        return Command::POWER_DOWN;
-    if (commandTypeHolder == "7" && parseCmdArgs(1))
-        return Command::READ_FLIGHT;
-    printlnlog("Unknown command or malformed arguments");
-#endif
-
-    return Command::NONE;
-}
-
-void readCmd()
-{
-    if (ground_station.connected())
-    {
-        handleWifi();
-    }
-    else
-    {
-        if (Serial.available() > 0)
-        {
-#ifndef SIM_MODE
-            char c = Serial.read();
-            commandCollector += c;
-            if (c == '\n')
-            {
-                commandCollector = commandCollector.substring(0, commandCollector.length() - 1);
-                activeCommand = parseCmd();
-                commandCollector = "";
-            }
-            else
-            {
-                activeCommand = Command::NONE;
-            }
-#endif
-#ifdef SIM_MODE
-
-            long currentTimeT = Serial.parseInt();
-            if (currentTimeT != 0 && currentTimeT > currentTime)
-            {
-                currentTime = currentTimeT;
-
-#ifdef DEBUG
-                printlog("time: ");
-                printlog(currentTime);
-#endif
-
-                pressure = Serial.parseFloat();
-                if (initalPresure == 0 || !isinff(pressure) && !isnanf(pressure))
-                {
-                    initalPresure = pressure;
-                }
-#ifdef DEBUG
-                printlog(" pressure: ");
-                printlog(pressure);
-#endif
-                bmpTemperature = Serial.parseFloat();
-#ifdef DEBUG
-                printlog(", temp: ");
-                printlog(bmpTemperature);
-#endif
-            }
-#endif
-        }
-        else
-        {
-            activeCommand = Command::NONE;
-        }
-    }
-}
-
-void handleWifi()
-{
-    // Is there any data from the ground station?
-    // TODO
-}
 void minimalLog()
 {
     printlogf("[%s] ",
@@ -1072,20 +905,11 @@ void loop()
 {
 #ifndef SIM_MODE
     currentTime = millis();
-
     deltaTime = currentTime - previousTime;
 #endif
-    // If we are not connected to a ground station check if there is a new client
-    if (wifiServer.hasClient() && !ground_station.connected())
-    {
-        ground_station = wifiServer.available();
-        printlnlog("New client");
-        ground_station.println("connected");
-    }
     pollImu();
     pollBmp();
-    // pollGps();
-    readCmd();
+    pollGps();
 #ifdef SIM_MODE
     deltaTime = currentTime - previousTime;
 #endif

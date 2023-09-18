@@ -7,7 +7,6 @@
 #include "MPU6050.h"
 #include <Adafruit_BMP280.h>
 #include <TinyGPSPlus.h>
-
 #endif
 #include <Wire.h>
 #include "WiFi.h"
@@ -15,6 +14,11 @@
 #include "SD.h"
 #include "SPI.h"
 #include <time.h>
+
+#include "comms.h"
+#include "common.h"
+#include "const.h"
+
 #ifdef __cplusplus
 extern "C"
 {
@@ -24,52 +28,6 @@ extern "C"
 }
 #endif
 uint8_t temprature_sens_read();
-
-#define DEBUG // Comment out to disable debug messages
-#define VERSION "0.2.0"
-
-// I2C pins (SDA, SCL)
-#define SDA 21
-#define SCL 22
-
-// GPS serial2 pins (RX, TX)
-#define GPS_RX 16
-#define GPS_TX 17
-
-#define STATUS_LED 2
-#define ERROR_LED 12
-#define BUZZER_PIN 13
-
-// LED patterns
-#define LED_ON_SHORT 100
-#define LED_ON_MED 200
-#define LED_ON_LONG 1000
-
-#define LED_OFF_SHORT 100
-#define LED_OFF_MED 300
-#define LED_OFF_LONG 1000
-
-#define LAUNCH_DETECT_THRESHOLD 1.0 // Meters
-#define LAUNCH_DETECT_TICKS 10     // This many ticks for confirmed launch
-
-#define DESCENT_DETECT_THRESHOLD 1.0
-#define DESCENT_DETECT_TICKS 10
-
-#define LANDED_DETECT_THRESHOLD_LOW -0.4 // Meters
-#define LANDED_DETECT_THRESHOLD_HIGH 0.4 // Meters
-#define LANDED_DETECT_TICKS 100           // Number of ticks with subthreshold altitude change for landing event
-
-#define LOG_INTERVAL 1000 // ms between (minimal) data log
-#define SPEED_INTERVAL 50 // ms between speed calculations
-
-// #define RAM_LOG_ENABLED
-#define HISTORY_SIZE 10000  // max dynamically allocated DRAM (15KB) https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/memory-types.html
-#define HISTORY_INTERVAL 50 // ms between history updates
-#define LOG_SENSOR_COUNT 2  // Altitude, Vertical Velocity
-
-#define CSV_HEADER "time,altitude,z_velocity,airtemp,airpressure"
-// #define SD_CARD
-#define MAX_ARGS 8
 
 // #define FLUSH_EVERY 1000
 fs::File logFile;
@@ -133,6 +91,14 @@ int gxOffset = 0.0;
 int gyOffset = 0.0;
 int gzOffset = 0.0;
 
+// Command holders from comms.h
+extern unsigned long commandSalt;
+extern int commandInt;
+extern Command command;
+extern int commandArgLength;
+extern int commandArgCount;
+extern byte commandArgBuffer[MAX_ARGS*4];
+
 int16_t ax, ay, az;
 int16_t gx, gy, gz;
 float pressure, bmpTemperature, altitude, previousAltitude;
@@ -148,34 +114,7 @@ float peakVerticalVelocity = 0; // The largest vertical velocity seen so far (lo
 unsigned long peakVerticalVelocityTime = 0;
 
 bool calibrate_done = false;
-enum State
-{
-    IDLE,
-    CALIBRATE,
-    ARMED,
-    ASCENT,
-    DESCENT,
-    LANDED,
-    GROUNDSTATION,
-    ERROR
-};
-
 char *StateNames[] = {"IDLE", "CALIBRATE", "ARMED", "ASCENT", "DESCENT", "LANDED", "GROUNDSTATION", "ERROR"};
-
-enum Command
-{
-    // Settings related
-    ARM, // 0
-    UNARM,
-    SET_FLIGHT,
-    SYSTEM_REPORT,
-    SET_BUZZER,
-    BATTERY_CHECK,
-    SLEEP,
-    POWER_DOWN,
-    READ_FLIGHT,
-    NONE // No command (default)
-};
 
 State state = State::IDLE;
 int stateChanged = 0; // Has the state changed since last tick(); (0 - no, 1 - yes, 2 - state changing this tick (ignore))
@@ -314,15 +253,12 @@ void readFile(const char *path);
 void writeFile(const char *path, const char *message);
 void appendFile(const char *path, const char *message);
 uint16_t createFlightFiles(uint16_t flight_id);
-void initMetaData();
 uint16_t readFlightId();
 bool saveMetaData();
 void closeFlightFiles();
-void initErrorLoop();
 void allocateHistoryMemory();
 void initSensors();
 void pollGps();
-void initWiFi();
 void initSD();
 void setup();
 void logData();
@@ -342,7 +278,6 @@ void saveFlight();
 bool parseCmdArgs(int expectedArgs);
 Command parseCmd();
 void readCmd();
-void handleWifi();
 void minimalLog();
 void loop();
 #endif
