@@ -186,7 +186,18 @@ void initSD()
 }
 
 #endif
+#define COMM_TEST
+#ifdef COMM_TEST
+void setup() {
+    Serial.begin(115200);
+    initComms();
+    testComms();
+    while (1) {}
+}
 
+void loop() {
+}
+#else 
 void allocateHistoryMemory()
 {
     printlog("Allocating ");
@@ -500,7 +511,7 @@ void eventEntry(char *s)
 
 void stateChange(State newState)
 {
-    sprintf(fmtBuffer, "State change %s -> %s", StateNames[(int)state], StateNames[(int)newState]);
+    sprintf(fmtBuffer, "State change %s -> %s", StateNames[(uint8_t)state], StateNames[(uint8_t)newState]);
     printlnlog(fmtBuffer);
     eventEntry(fmtBuffer);
     fmtBuffer[0] = '\0';
@@ -574,7 +585,7 @@ void report()
     printlnlog();
     /*printlnlog("-- Data --");
     printlnlog("time,altitude,speed");
-    for (int i = 0; i < finalLogIndex; i++)
+    for (uint8_t i = 0; i < finalLogIndex; i++)
     {
         printlog(i * HISTORY_INTERVAL);
         printlog(",");
@@ -901,6 +912,95 @@ void minimalLog()
     printlogf("State: %s\n", StateNames[state]);
 }
 
+bool commandPacketCallback(uint8_t *responsePacketBuffer, uint8_t *responsePacketLength, uint8_t *args, uint8_t argsCount, uint8_t argsArrayLength, Command cmd, unsigned long time, unsigned long salt)
+{
+    bool ackNack = false;
+    uint8_t reason = 0; // 1: bad arg count/length, 2: bad arg(s) value, 3: Wrong context, 4: unknown/unsupported command type, 5+: reserved (0: ok)
+    switch (cmd)
+    {
+    case Command::ARM:
+        if (argsCount == 1 && argsArrayLength == 4)
+        {
+            unsigned long armCode = args[0] >> 24;
+            armCode += args[1] >> 16;
+            armCode += args[2] >> 8;
+            armCode += args[3];
+            // TODO: check arm code against current issued code - for now hardcoded to 12345 (ik, secure)
+            if (armCode == TEMP_ARM_CODE)
+            {
+                stateChange(State::ARMED);
+                ackNack = true;
+            }
+            else
+                reason = 2;
+        }
+        else
+        {
+            reason = 1;
+        }
+
+        break;
+    case Command::UNARM:
+        stateChange(State::IDLE);
+        ackNack = true;
+        break;
+    case Command::SET_BUZZER:
+        if (argsCount == 1 && argsArrayLength == 1)
+        {
+            buzzerState = args[0] == 1;
+            ackNack = true;
+        }
+        else
+            reason = 1;
+        break;
+    case Command::SLEEP:
+        if (argsCount == 1 && argsArrayLength == 4)
+        {
+            unsigned long masterCode = args[0] >> 24;
+            masterCode += args[1] >> 16;
+            masterCode += args[2] >> 8;
+            masterCode += args[3];
+            if (masterCode == MASTER_CODE)
+            {
+                stateChange(State::IDLE);
+                // TODO: tell system to begin sleep procedure
+                ackNack = true;
+            }
+            else
+                reason = 2;
+        }
+        else
+            reason = 1;
+        break;
+    case Command::POWER_DOWN:
+        if (argsCount == 1 && argsArrayLength == 4)
+        {
+            unsigned long masterCode = args[0] >> 24;
+            masterCode += args[1] >> 16;
+            masterCode += args[2] >> 8;
+            masterCode += args[3];
+            if (masterCode == MASTER_CODE)
+            {
+                stateChange(State::IDLE);
+                // TODO: tell system to shut down
+                ackNack = true;
+            }
+            else
+                reason = 2;
+        }
+        else
+            reason = 1;
+        break;
+        
+    default:
+        reason = 4;
+        break;
+    }
+
+    *responsePacketLength = formCmdAckPacket(responsePacketBuffer, salt, cmd, ackNack, reason);
+    return ackNack;
+}
+
 void loop()
 {
 #ifndef SIM_MODE
@@ -919,3 +1019,4 @@ void loop()
     delay(1);
     previousTime = currentTime;
 }
+#endif

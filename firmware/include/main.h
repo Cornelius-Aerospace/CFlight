@@ -83,20 +83,20 @@ bool mpu_state = false;
 bool bmp_state = false;
 #endif
 // IMU offsets
-int useImuOffsets = false;
-int axOffset = 0.0;
-int ayOffset = 0.0;
-int azOffset = 0.0;
-int gxOffset = 0.0;
-int gyOffset = 0.0;
-int gzOffset = 0.0;
+uint8_t useImuOffsets = false;
+uint8_t axOffset = 0.0;
+uint8_t ayOffset = 0.0;
+uint8_t azOffset = 0.0;
+uint8_t gxOffset = 0.0;
+uint8_t gyOffset = 0.0;
+uint8_t gzOffset = 0.0;
 
 // Command holders from comms.h
 extern unsigned long commandSalt;
-extern int commandInt;
+extern uint8_t commandInt;
 extern Command command;
-extern int commandArgLength;
-extern int commandArgCount;
+extern uint8_t commandArgLength;
+extern uint8_t commandArgCount;
 extern byte commandArgBuffer[MAX_ARGS*4];
 
 int16_t ax, ay, az;
@@ -117,7 +117,7 @@ bool calibrate_done = false;
 char *StateNames[] = {"IDLE", "CALIBRATE", "ARMED", "ASCENT", "DESCENT", "LANDED", "GROUNDSTATION", "ERROR"};
 
 State state = State::IDLE;
-int stateChanged = 0; // Has the state changed since last tick(); (0 - no, 1 - yes, 2 - state changing this tick (ignore))
+uint8_t stateChanged = 0; // Has the state changed since last tick(); (0 - no, 1 - yes, 2 - state changing this tick (ignore))
 String commandCollector = "";
 
 String commandTypeHolder = "";
@@ -141,7 +141,7 @@ bool stageChFired = false;   // seccond stage motor has been ignited)
 bool masterArm = false; // Set true when entering arm state, false when unarmed, landed or ground station entered
 
 unsigned long lastLedEvent = 0;
-int activeLedPattern = 0;
+uint8_t activeLedPattern = 0;
 uint16_t ledPatternStage = 0;
 
 bool buzzerState = false;
@@ -215,7 +215,7 @@ inline void printlog()
     }
 #endif
 }
-const int maxStringLength = 256;
+const uint8_t maxStringLength = 256;
 char formattedString[maxStringLength];
 
 void printlogf(const char *format, ...)
@@ -227,7 +227,7 @@ void printlogf(const char *format, ...)
     va_start(args, format);
 
     // Format the string using vsnprintf
-    int formattedLength = vsnprintf(formattedString, maxStringLength, format, args);
+    uint8_t formattedLength = vsnprintf(formattedString, maxStringLength, format, args);
 
     // Check if the formatted string fits within the buffer
     if (formattedLength >= 0 && formattedLength < maxStringLength)
@@ -275,7 +275,7 @@ void systemReport();
 void tick();
 void updateOutputs();
 void saveFlight();
-bool parseCmdArgs(int expectedArgs);
+bool parseCmdArgs(uint8_t expectedArgs);
 Command parseCmd();
 void readCmd();
 void minimalLog();

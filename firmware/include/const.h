@@ -3,7 +3,8 @@
 
 #define DEBUG // Comment out to disable debug messages
 #define VERSION "0.2.0"
-
+#define MASTER_CODE 202910
+#define TEMP_ARM_CODE 12345
 // // I2C pins (SDA, SCL)
 // #define SDA 21
 // #define SCL 22
