@@ -2,6 +2,8 @@
 #define CONST_H
 
 #define DEBUG // Comment out to disable debug messages
+// #define COMM_TEST
+
 #define VERSION "0.2.0"
 #define MASTER_CODE 202910
 #define TEMP_ARM_CODE 12345

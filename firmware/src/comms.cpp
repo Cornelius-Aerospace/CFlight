@@ -121,15 +121,7 @@ void broadcast(const String &message)
         esp_now_add_peer(&peerInfo);
     }
     esp_err_t result = esp_now_send(broadcastAddress, (const uint8_t *)message.c_str(), message.length());
-    // and this will send a message to a specific device
-    /*uint8_t peerAddress[] = {0x3C, 0x71, 0xBF, 0x47, 0xA5, 0xC0};
-    esp_now_peer_info_t peerInfo = {};
-    memcpy(&peerInfo.peer_addr, peerAddress, 6);
-    if (!esp_now_is_peer_exist(peerAddress))
-    {
-      esp_now_add_peer(&peerInfo);
-    }
-    esp_err_t result = esp_now_send(peerAddress, (const uint8_t *)message.c_str(), message.length());*/
+    // Check the result
     if (result == ESP_OK)
     {
         return;
@@ -243,6 +235,9 @@ void receiveCallback(const uint8_t *macAddr, const uint8_t *data, int dataLen)
     if (packetType == PacketType::COMMAND)
     {
         parseCommandPayload((uint8_t *)packetPayload, payloadLength, packetTime, packetSalt);
+    } else if (packetType == PacketType::PING) {
+        unsigned long pingId = packetPayload[0] << 24 | packetPayload[1] << 16 | packetPayload[2] << 8 | packetPayload[3];
+        sendPong(pingId, macAddr);
     }
 }
 
@@ -310,7 +305,7 @@ unsigned long formTelemetryPacket(uint8_t *packetBuffer, unsigned long time, flo
     return closePayload(packetBuffer, 32-PACKET_HEADER_SIZE);
 }
 
-bool parseCommandPayload(uint8_t *payloadBuffer, unsigned long payloadLength, unsigned long rxTime, unsigned long rxSalt)
+bool parseCommandPayload(uint8_t *payloadBuffer, uint8_t payloadLength, unsigned long rxTime, unsigned long rxSalt)
 {
     // Command packet payload format:
     // 0-3: Command salt (unsigned long)

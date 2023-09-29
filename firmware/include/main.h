@@ -114,7 +114,9 @@ float peakVerticalVelocity = 0; // The largest vertical velocity seen so far (lo
 unsigned long peakVerticalVelocityTime = 0;
 
 bool calibrate_done = false;
-char *StateNames[] = {"IDLE", "CALIBRATE", "ARMED", "ASCENT", "DESCENT", "LANDED", "GROUNDSTATION", "ERROR"};
+const char *StateNames[] = {"IDLE", "CALIBRATE", "ARMED", "ASCENT", "DESCENT", "LANDED", "GROUNDSTATION", "ERROR"};
+bool operationStatus = false;
+unsigned long errorCount = 0;
 
 State state = State::IDLE;
 uint8_t stateChanged = 0; // Has the state changed since last tick(); (0 - no, 1 - yes, 2 - state changing this tick (ignore))
@@ -215,7 +217,7 @@ inline void printlog()
     }
 #endif
 }
-const uint8_t maxStringLength = 256;
+const uint8_t maxStringLength = 255;
 char formattedString[maxStringLength];
 
 void printlogf(const char *format, ...)

@@ -54,7 +54,7 @@ uint8_t formCmdAckPacket(uint8_t *txBuffer, unsigned long rxSalt, Command rxCmd,
 uint8_t calculateChecksum(char *payload, uint8_t payloadLength);
 uint8_t closePayload(uint8_t *packetBuffer, uint8_t payloadLength);
 
-bool parseCommandPayload(uint8_t *payloadBuffer, unsigned long payloadLength, unsigned long rxTime, unsigned long rxSalt);
+bool parseCommandPayload(uint8_t *payloadBuffer, uint8_t payloadLength, unsigned long rxTime, unsigned long rxSalt);
 
 void initComms();
 #endif

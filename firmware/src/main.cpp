@@ -186,7 +186,6 @@ void initSD()
 }
 
 #endif
-#define COMM_TEST
 #ifdef COMM_TEST
 void setup() {
     Serial.begin(115200);
@@ -605,6 +604,9 @@ float cpuTemp()
 void systemReport()
 {
     printlnlog("- System Report -");
+    printlogf("Operation Status: %s ", operationStatus ? "OK" : "ERROR");
+    printlogf("Uptime: %s, ", formatTimestamp(currentTime));
+    printlogf("Errors: %i\n", errorCount);
     printlogf("GPS. Sat Fix: %s, Sat count: %i,", gpsFix ? "YES" : "NO", gpsSatilliteCount);
     printlogf(" HDOP: %i, ", gpsHdop);
     if (gpsFix)

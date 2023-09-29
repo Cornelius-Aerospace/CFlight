@@ -3,6 +3,12 @@ import time
 import csv
 import enum
 import threading
+import struct
+
+DEBUG = True
+PING_EVERY = 1000  # ms
+PING_TIMEOUT = 5000  # ms
+
 
 
 class SimEntry:
@@ -44,7 +50,9 @@ class PacketType(enum.Enum):
     SETTING = 4
     ACK = 5
     CODE = 6
-    HANDSHAKE = 7
+    HANDSHAKE = 7,
+    ERROR = 8,
+    REPORT = 9
 
 
 class PacketHeader:
@@ -72,6 +80,7 @@ class PacketHeader:
         encoded.extend([0xFF, 0xFF])
         return encoded
 
+    @staticmethod
     def decode(bytes):
         if bytes[0] + bytes[1] + bytes[2] != 255 * 3:
             print("Error in packet header, missing sync bytes (start)")
@@ -111,6 +120,7 @@ class Packet:
         encoded[8] = checksum
         return encoded
 
+    @staticmethod
     def decode(bytes):
         header = PacketHeader.decode(bytes)
         if header == None:
@@ -123,10 +133,11 @@ class Packet:
             )
 
         packet = Packet(
-            header.type, header.salt, header.time, bytes[16 : header.length + 16]
+            header.type, header.salt, header.time, list(
+                bytes[16: header.length + 16])
         )
         calcCheck = 0
-        for b in packet.payload + bytearray([0xFF, 0xFE, 0xFB, 0xFF]):
+        for b in packet.payload + [0xFF, 0xFE, 0xFB, 0xFF]:
             calcCheck += b
             calcCheck %= 255
         if calcCheck != bytes[8]:
@@ -160,7 +171,7 @@ class Command:
         return "{}:{};\n".format(self.type.value, self.argstring()).encode()
 
 
-class CFlight:
+class Device:
     def __init__(self, port="/dev/ttyUSB0", baud=115200):
         self.port = port
         self.baud = baud
@@ -185,8 +196,8 @@ class CFlight:
             self.device.close()
             self.connected = False
 
-    def sendCommand(self, command):
-        asBytes = command.encode()
+    def sendPacket(self, packet):
+        asBytes = packet.encode()
         self.device.write(asBytes)
 
     def readloop(self):
@@ -198,27 +209,147 @@ class CFlight:
 
         print("Read loop exiting")
 
+    def registerCallback(self, callback):
+        self.callback = callback
 
-packet = Packet(2, 69, 1000, [x for x in range(102)])
-i = 0
-encoded = packet.encode()
-print("Encoded bytes")
-for b in encoded:
-    print("{}: {}".format(i, b))
-    i += 1
-print("")
-packet2 = Packet.decode(encoded)
-packet2.print()
 
-"""
-device = CFlight()
-device.connect()
-time.sleep(1)
-armCmd = Command(CommandType.SET_FLIGHT, [1, 1, 200])
-device.sendCommand(armCmd)
-time.sleep(0.5)
-armCmd = Command(CommandType.ARM, [])
-device.sendCommand(armCmd)
-input("Press enter to exit: \n")
-device.closeConnection()
-"""
+def unitTest():
+    packet = Packet(2, 69, 1000, [x for x in range(102)])
+    packet.print()
+    print("")
+    encoded = packet.encode()
+
+    packet2 = Packet.decode(encoded)
+    if (packet2 == None):
+        print("Error decoding packet")
+    else:
+        packet2.print()
+
+
+class CFlight:
+    def __init__(self, commsPort, commsBaud):
+
+        self.deviceStatus = 0  # 0 = Disconnected, 1 = Connected, 2 = Nominal, 3 = Error, 4 = timeout
+        self.lastDeviceStatus = 0
+        self.lastPong = 0
+        self.lastPing = 0
+        self.device = Device(commsPort, commsBaud)
+        self.device.connect()
+        time.sleep(1)
+        self.device.registerCallback(self.packetCallback)
+        reportCmd = Command(CommandType.SYSTEM_REPORT, [])
+        pollStatus = Packet(PacketType.COMMAND, 0, time.time(), reportCmd.encode())
+        self.device.sendPacket(pollStatus)
+        self.commandQueue = []
+        self.callbacks = {}
+        self.running = True
+        self.threadbox = threading.Thread(target=self.loopyDoopey)
+        self.threadbox.start()
+    
+    def stop(self):
+        self.running = False
+        self.device.closeConnection()
+
+    def queueCommand(self, command):
+        self.commandQueue.append(command)
+    
+    def sendPacket(self, packet):
+        self.device.sendPacket(packet)
+    
+    def registerCallback(self, callback, callbackType):
+        # callback must be a function that takes a packet as an argument
+        if callbackType in self.callbacks:
+            self.callbacks[callbackType].append(callback)
+        else:
+            self.callbacks[callbackType] = [callback]
+
+
+    def parsePong(self, payload):
+        # payload 0:4 = ping id (ignore for now) TODO: check ping ID
+        pingId = int.from_bytes(payload[0:4], byteorder="little")
+        if pingId != self.lastPing:
+            print("Warning: pong ID mismatch. Expected {}, got {}".format(self.lastPing, pingId))
+        self.lastPong = time.time()
+
+
+    def packetCallback(self, packetRaw):
+        packet = Packet.decode(packetRaw)
+        if packet == None:
+            print("Error decoding packet")
+            return
+        
+        callbacks = self.callbacks.get(packet.header.type, [])
+        for callback in callbacks:
+            callback(packet)
+
+        if packet.header.type == PacketType.REPORT:
+            self.parseSystemReport(packet.payload)
+        elif packet.header.type == PacketType.PONG:
+            self.parsePong(packet.payload)
+
+
+    def parseSystemReport(self, payload):
+        # System report starts with "- System Report -"
+        reportHeaderEnd = len("- System Report -") + 1
+        summaryLine = ""
+        for i in range(reportHeaderEnd, len(payload)):
+            if payload[i] == '\n':
+                summaryLine = payload[reportHeaderEnd:i]
+                break
+
+        if summaryLine == "":
+            print("Error parsing system report")
+            self.deviceStatus = 1
+            return False
+        if DEBUG:
+            print("System report: {}".format(summaryLine))
+
+        # Parse summary line
+        # Format: "OS: <OK|ERROR>, Uptime: <uptime>, Errors: <error count> |"
+        summary = summaryLine.split(",")
+        if len(summary) != 3:
+            print("Error parsing system report summary")
+            self.deviceStatus = 1
+            return False
+        OpStatus = summary[0].split(":")[1].strip()
+        Uptime = summary[1].split(":")[1].strip()
+        Errors = summary[2].split(":")[1].strip()
+        if DEBUG:
+            print("OpStatus: {}, Uptime: {}, Errors: {}".format(
+                OpStatus, Uptime, Errors))
+
+        if OpStatus != "OK" or Uptime == "" or Errors != "0":
+            print("Error: system report status is not OK")
+            self.deviceStatus = 3
+        else:
+            self.deviceStatus = 2
+
+    def loopyDoopey(self):
+        try:
+            currentTime = time.time()
+            while self.running:
+                if (currentTime - self.lastPing >= PING_EVERY):
+                    ping = Packet(PacketType.PING, 0, currentTime,
+                                struct.pack("f", currentTime))
+                    self.device.sendPacket(ping)
+                    self.lastPing = currentTime
+                if (currentTime - self.lastPong >= PING_TIMEOUT):
+                    print("Error: ping/pong timeout")
+                    self.deviceStatus = 4
+
+                if (self.deviceStatus == 2):
+                    for cmdIndex in range(len(self.commandQueue)):
+                        cmd = self.commandQueue[cmdIndex]
+                        if type(cmd) != Command:
+                            print(
+                                "Error: command queue contains non-command, skipping. Type: {}".format(type(cmd)))
+                            continue
+                        cmdPacket = Packet(PacketType.COMMAND, 0,
+                                        time.time(), cmd.encode())
+                        self.device.sendPacket(cmdPacket)
+                        self.commandQueue.pop(cmdIndex)
+
+        except KeyboardInterrupt:
+            print("Exiting...")
+            self.device.closeConnection()
+            self.running = False
