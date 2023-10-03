@@ -18,6 +18,7 @@
 #include "comms.h"
 #include "common.h"
 #include "const.h"
+#include "settings.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -82,14 +83,10 @@ TinyGPSPlus gps;     // Serial GPS
 bool mpu_state = false;
 bool bmp_state = false;
 #endif
-// IMU offsets
-uint8_t useImuOffsets = false;
-uint8_t axOffset = 0.0;
-uint8_t ayOffset = 0.0;
-uint8_t azOffset = 0.0;
-uint8_t gxOffset = 0.0;
-uint8_t gyOffset = 0.0;
-uint8_t gzOffset = 0.0;
+
+SystemSettings SysSettings;
+FlightSettings ActiveFlightSettings;
+bool flightConfigured = false;
 
 // Command holders from comms.h
 extern unsigned long commandSalt;
@@ -131,10 +128,6 @@ uint16_t landedTicker = 0;
 
 Command activeCommand = Command::NONE;
 unsigned long commandData = 0; // Data passed with command
-
-uint16_t mainDeploymentAltitude = 150; // Altitude at which main chute deployed (0 to disable)
-bool drougeChuteEnabled = true;        // If true fire DrougeCH pyro at detect apogee
-bool dualDeploymentEnabled = true;     // If true wait for mainDeploymentAltitude and then fire DDMainCH
 
 bool drougeFired = false;    // set true after drouge pyro fired
 bool mainChuteFired = false; // Set true after dual deploy main chute fired

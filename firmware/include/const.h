@@ -15,9 +15,6 @@
 #define GPS_RX 16
 #define GPS_TX 17
 
-#define STATUS_LED 2
-#define ERROR_LED 12
-#define BUZZER_PIN 13
 
 // LED patterns
 #define LED_ON_SHORT 100

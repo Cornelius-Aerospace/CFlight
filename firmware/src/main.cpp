@@ -227,15 +227,15 @@ void initSensors()
     if (mpu_state)
     {
         printlnlog("- Connected to MPU6050 (AxGy)");
-        if (useImuOffsets)
+        if (SysSettings.useImuOffsets)
         {
             printlnlog("- Setting IMU offsets...");
-            accelgyro.setXAccelOffset(axOffset);
-            accelgyro.setYAccelOffset(ayOffset);
-            accelgyro.setZAccelOffset(azOffset);
-            accelgyro.setXGyroOffset(gxOffset);
-            accelgyro.setYGyroOffset(gyOffset);
-            accelgyro.setZGyroOffset(gzOffset);
+            accelgyro.setXAccelOffset(SysSettings.axOffset);
+            accelgyro.setYAccelOffset(SysSettings.ayOffset);
+            accelgyro.setZAccelOffset(SysSettings.azOffset);
+            accelgyro.setXGyroOffset(SysSettings.gxOffset);
+            accelgyro.setYGyroOffset(SysSettings.gyOffset);
+            accelgyro.setZGyroOffset(SysSettings.gzOffset);
         }
     }
     else
@@ -264,7 +264,7 @@ void initSensors()
 
     printlnlog("- Done! BMP online");
     printlnlog("Connecting to GPS...");
-    Serial2.begin(9600, SERIAL_8N1, GPS_RX, GPS_TX);
+    Serial2.begin(9600, SERIAL_8N1, SysSettings.gpsRxPin, SysSettings.gpsTxPin);
     printlnlog("- Done! GPS online");
 #endif
 }
@@ -356,10 +356,11 @@ void setup()
 {
     // initialize serial communication
     Serial.begin(115200);
+    SysSettings = SystemSettings();
     printlnlog("CFlight v" + String(VERSION));
-    pinMode(STATUS_LED, OUTPUT);
-    pinMode(ERROR_LED, OUTPUT);
-    pinMode(BUZZER_PIN, OUTPUT);
+    pinMode(SysSettings.statusLedPin, OUTPUT);
+    pinMode(SysSettings.errorLedPin, OUTPUT);
+    pinMode(SysSettings.buzzerPin, OUTPUT);
 // initialize devices
 #ifdef SD_CARD
     initSD();
@@ -664,15 +665,16 @@ void tick()
         else if (activeCommand == Command::SET_FLIGHT)
         {
 
-            drougeChuteEnabled = commandArgBuffer[0] == 1;
-            dualDeploymentEnabled = commandArgBuffer[1] == 1;
+            ActiveFlightSettings.drougeChuteEnabled = commandArgBuffer[0] == 1;
+            ActiveFlightSettings.dualDeploymentEnabled = commandArgBuffer[1] == 1;
             // mainDeploymentAltitude is uint16_t, so we need to combine the two bytes
-            mainDeploymentAltitude = (commandArgBuffer[2] << 8) || commandArgs[3];
+            ActiveFlightSettings.mainDeploymentAltitude = (commandArgBuffer[2] << 8) || commandArgs[3];
 
             printlogf("Set flight config: Dual Deploy: %s, Drouge Deploy: %s, Main Deploy Alt: %s\n",
-                      dualDeploymentEnabled ? "YES" : "NO",
-                      drougeChuteEnabled ? "YES" : "NO",
-                      dualDeploymentEnabled ? String(mainDeploymentAltitude) : "N/A");
+                      ActiveFlightSettings.dualDeploymentEnabled ? "YES" : "NO",
+                      ActiveFlightSettings.drougeChuteEnabled ? "YES" : "NO",
+                      ActiveFlightSettings.dualDeploymentEnabled ? String(ActiveFlightSettings.mainDeploymentAltitude) : "N/A");
+            flightConfigured = true;
             activeCommand = Command::NONE;
         }
     }
@@ -733,12 +735,12 @@ void tick()
         else if (state == State::DESCENT)
         {
             buzzerState = true;
-            if (stateChanged == 1 && drougeChuteEnabled)
+            if (stateChanged == 1 && ActiveFlightSettings.drougeChuteEnabled)
             {
                 // Fire drouge chute
                 firePyroCH(0);
             }
-            else if (dualDeploymentEnabled && !mainChuteFired && altitude <= mainDeploymentAltitude)
+            else if (ActiveFlightSettings.dualDeploymentEnabled && !mainChuteFired && altitude <= ActiveFlightSettings.mainDeploymentAltitude)
             {
                 // Fire dual-deployment main chute
                 firePyroCH(1);
@@ -781,11 +783,11 @@ void updateOutputs()
 {
     if (buzzerState)
     {
-        tone(BUZZER_PIN, 2000, 500);
+        tone(SysSettings.buzzerPin, 2000, 500);
     }
     else
     {
-        digitalWrite(BUZZER_PIN, LOW);
+        digitalWrite(SysSettings.buzzerPin, LOW);
     }
 
     if (currentTime - lastLogEvent >= LOG_INTERVAL)
@@ -803,7 +805,7 @@ void updateOutputs()
     {
         lastLedEvent = currentTime;
         ledPatternStage = 0;
-        digitalWrite(STATUS_LED, HIGH);
+        digitalWrite(SysSettings.statusLedPin, HIGH);
     }
     if (state == State::IDLE)
     {
@@ -812,17 +814,17 @@ void updateOutputs()
             lastLedEvent = currentTime;
             if (ledPatternStage % 2 == 0)
             {
-                digitalWrite(STATUS_LED, LOW);
+                digitalWrite(SysSettings.statusLedPin, LOW);
             }
             else
             {
-                digitalWrite(STATUS_LED, HIGH);
+                digitalWrite(SysSettings.statusLedPin, HIGH);
             }
             ledPatternStage++;
             if (ledPatternStage >= 4)
             {
                 ledPatternStage = 0;
-                digitalWrite(STATUS_LED, HIGH);
+                digitalWrite(SysSettings.statusLedPin, HIGH);
             }
         }
     }
@@ -831,7 +833,7 @@ void updateOutputs()
         if (lastLedEvent == 0)
         {
             lastLedEvent = currentTime;
-            digitalWrite(STATUS_LED, HIGH);
+            digitalWrite(SysSettings.statusLedPin, HIGH);
         }
         else if (currentTime - lastLedEvent >= calibrateLedPattern[ledPatternStage])
         {
@@ -839,13 +841,13 @@ void updateOutputs()
             if (ledPatternStage == 0)
             {
                 ledPatternStage = 1;
-                digitalWrite(STATUS_LED, LOW);
+                digitalWrite(SysSettings.statusLedPin, LOW);
             }
             else
             {
 
                 ledPatternStage = 0;
-                digitalWrite(STATUS_LED, HIGH);
+                digitalWrite(SysSettings.statusLedPin, HIGH);
             }
         }
     }
@@ -854,7 +856,7 @@ void updateOutputs()
         if (lastLedEvent == 0)
         {
             lastLedEvent = currentTime;
-            digitalWrite(STATUS_LED, HIGH);
+            digitalWrite(SysSettings.statusLedPin, HIGH);
         }
         else if (currentTime - lastLedEvent >= armedLedPattern[ledPatternStage])
         {
@@ -862,13 +864,13 @@ void updateOutputs()
             if (ledPatternStage == 0)
             {
                 ledPatternStage = 1;
-                digitalWrite(STATUS_LED, LOW);
+                digitalWrite(SysSettings.statusLedPin, LOW);
             }
             else
             {
 
                 ledPatternStage = 0;
-                digitalWrite(STATUS_LED, HIGH);
+                digitalWrite(SysSettings.statusLedPin, HIGH);
             }
         }
     }
@@ -877,24 +879,24 @@ void updateOutputs()
         if (lastLedEvent == 0)
         {
             lastLedEvent = currentTime;
-            digitalWrite(STATUS_LED, HIGH);
+            digitalWrite(SysSettings.statusLedPin, HIGH);
         }
         else if (currentTime - lastLedEvent >= groundLedPattern[ledPatternStage])
         {
             lastLedEvent = currentTime;
             if (ledPatternStage % 2 == 0)
             {
-                digitalWrite(STATUS_LED, LOW);
+                digitalWrite(SysSettings.statusLedPin, LOW);
             }
             else
             {
-                digitalWrite(STATUS_LED, HIGH);
+                digitalWrite(SysSettings.statusLedPin, HIGH);
             }
             ledPatternStage++;
             if (ledPatternStage >= 4)
             {
                 ledPatternStage = 0;
-                digitalWrite(STATUS_LED, HIGH);
+                digitalWrite(SysSettings.statusLedPin, HIGH);
             }
         }
     }
