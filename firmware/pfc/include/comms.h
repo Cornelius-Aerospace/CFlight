@@ -57,6 +57,7 @@ uint8_t calculateChecksum(char *payload, uint8_t payloadLength);
 uint8_t closePayload(uint8_t *packetBuffer, uint8_t payloadLength);
 
 bool parseCommandPayload(uint8_t *payloadBuffer, uint8_t payloadLength, unsigned long rxTime, unsigned long rxSalt);
+void registerCmdPacketCallback(std::function<bool(uint8_t *responsePacketBuffer, uint8_t *responsePacketLength, uint8_t *args, uint8_t argsCount, uint8_t argsArrayLength, Command cmd, unsigned long time, unsigned long salt)> cb);
 
 void initComms();
 #endif

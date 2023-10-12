@@ -141,7 +141,7 @@ uint16_t ledPatternStage = 0;
 
 bool buzzerState = false;
 
-float initalPresure = 0;                                                              // Presure at launch pad
+float initalPresure = 0.0;                                                              // Presure at launch pad
 unsigned long launchEventTimestamp, apoggeeEventTimestamp, landingEventTimestamp = 0; // Time at which the events were detected
 unsigned long lastLogEvent = 0;
 
@@ -150,7 +150,7 @@ unsigned long gpsSatilliteCount = 0;
 double gpsLatitude, gpsLongitude, gpsAltitude = 0;
 bool gpsFix = false;
 int32_t gpsHdop = 0;
-double gpsSpeed = 0;
+double gpsSpeed = 0.0;
 
 // Logging wrappers
 template <typename T>
@@ -240,8 +240,22 @@ void printlogf(const char *format, ...)
 }
 // End logging wrappers
 
+TaskHandle_t detectEventsTaskHandle = NULL;
+TaskHandle_t logDataTaskHandle = NULL;
+TaskHandle_t pollSensorsTaskHandle = NULL;
+TaskHandle_t updateOutputsTaskHandle = NULL;
+
 // Function prototypes
 void printlogf(const char *format, ...);
+void humanLogTimestamp(unsigned long timestamp);
+String formatTimestamp(unsigned long timestamp);
+
+void setup();
+
+void registerTasks(); // Register tasks with the scheduler
+void initSensors();
+void allocateHistoryMemory();
+
 void listDir(const char *dirname, uint8_t levels);
 void createDir(const char *path);
 void readFile(const char *path);
@@ -251,28 +265,26 @@ uint16_t createFlightFiles(uint16_t flight_id);
 uint16_t readFlightId();
 bool saveMetaData();
 void closeFlightFiles();
-void allocateHistoryMemory();
-void initSensors();
+void saveFlight();
+
 void pollGps();
 void initSD();
-void setup();
-void logData();
 void pollImu();
 void pollBmp();
+
 bool firePyroCH(uint8_t channel);
 void stateChange(State newState);
+
 void systemCheck();
-void humanLogTimestamp(unsigned long timestamp);
-String formatTimestamp(unsigned long timestamp);
+
 void report();
 void systemReport();
-
-void tick();
-void updateOutputs();
-void saveFlight();
-bool parseCmdArgs(uint8_t expectedArgs);
-Command parseCmd();
-void readCmd();
 void minimalLog();
-void loop();
+
+bool commandPacketCallback(uint8_t *responsePacketBuffer, uint8_t *responsePacketLength, uint8_t *args, uint8_t argsCount, uint8_t argsArrayLength, Command cmd, unsigned long time, unsigned long salt);
+
+void pollSensors(void * param);
+void detectEvents(void * param);
+void logData(void * param);
+void updateOutputs(void * param);
 #endif

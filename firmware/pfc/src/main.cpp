@@ -187,16 +187,20 @@ void initSD()
 
 #endif
 #ifdef COMM_TEST
-void setup() {
+void setup()
+{
     Serial.begin(115200);
     initComms();
     testComms();
-    while (1) {}
+    while (1)
+    {
+    }
 }
 
-void loop() {
+void loop()
+{
 }
-#else 
+#else
 void allocateHistoryMemory()
 {
     printlog("Allocating ");
@@ -367,6 +371,8 @@ void setup()
 #endif
     initSensors();
     initComms();
+    registerCmdPacketCallback(commandPacketCallback);
+    registerTasks();
 #ifdef RAM_LOG_ENABLED
     allocateHistoryMemory();
 #endif
@@ -389,38 +395,160 @@ void setup()
 #endif
 }
 
-void logData()
+void registerTasks()
 {
-    if (loggingData)
+    xTaskCreate(detectEvents, "detectEvents", 1000, NULL, 1, &detectEventsTaskHandle);
+    xTaskCreate(pollSensors, "pollSensors", 1000, NULL, 1, &pollSensorsTaskHandle);
+    xTaskCreate(logData, "logData", 1000, NULL, 1, &logDataTaskHandle);
+    xTaskCreate(updateOutputs, "updateOutputs", 1000, NULL, 1, &updateOutputsTaskHandle);
+}
+
+void pollSensors(void *param)
+{
+    for (;;)
     {
-        if (lastHistoryEntry >= HISTORY_INTERVAL)
+        pollImu();
+        pollBmp();
+        pollGps();
+        vTaskDelay(SENSOR_POLL_INTERVAL);
+        xTaskNotifyGiveIndexed(detectEventsTaskHandle, 0);
+    }
+}
+
+void detectEvents(void *param)
+{
+    for (;;)
+    {
+        uint32_t xRes = ulTaskNotifyTakeIndexed(0, pdFALSE, portMAX_DELAY);
+        if (xRes == 0)
         {
-#ifdef RAM_LOG_ENABLED
-            altitudeHistory[logIndex] = altitude;
-            speedHistory[logIndex] = verticalVelocity;
-            logIndex++;
-            if (logIndex >= HISTORY_SIZE)
+            // Timeout
+            continue;
+        }
+        // Fresh sensor data is available
+        if (stateChanged != 0) stateChanged -= 1;
+        if (state == State::IDLE)
+        {
+            if (initalPresure == 0.0)
             {
-                printlnlog("Log full!");
-                loggingData = false;
+                initalPresure = pressure; // First tick in cal mode, set initalPressure
             }
+            else
+            {
+                calibrate_done = true; // ?
+                // Add current to inital presure & divide by two ("running" avgerage) [TODO: check this]
+                initalPresure += pressure;
+                initalPresure /= 2;
+            }
+        }
+        else if (state == State::ARMED)
+        {
+
+            // We are looking for a takeoff event
+            if (altitude >= LAUNCH_DETECT_THRESHOLD)
+            {
+                launchDetectTicker++;
+                if (launchDetectTicker == 1)
+                {
+                    launchEventTimestamp = currentTime;
+                    loggingData = true;
+                }
+                if (launchDetectTicker == LAUNCH_DETECT_TICKS)
+                {
+                    // Launch Event detected
+                    stateChange(State::ASCENT);
+                }
+            }
+            else
+            {
+                launchDetectTicker = 0;
+                loggingData = false;
+                logIndex = 0;
+            }
+        }
+        else if (state == State::ASCENT)
+        {
+            // Are we still in-ascent
+            if (altitude > peakAltitude)
+            {
+                peakAltitude = altitude;
+                descentTicker = 0;
+            }
+            else if (peakAltitude - altitude >= LAUNCH_DETECT_THRESHOLD)
+            {
+                descentTicker++;
+                if (descentTicker == 1)
+                {
+                    apoggeeEventTimestamp = currentTime;
+                }
+                if (descentTicker == LAUNCH_DETECT_TICKS)
+                {
+                    stateChange(State::DESCENT);
+                }
+            }
+        }
+        else if (state == State::DESCENT)
+        {
+            if (verticalVelocity >= LANDED_DETECT_THRESHOLD_LOW && verticalVelocity <= LANDED_DETECT_THRESHOLD_HIGH)
+            {
+                landedTicker++;
+                if (landedTicker == 1)
+                {
+                    landingEventTimestamp = currentTime;
+                }
+                if (landedTicker == LANDED_DETECT_TICKS)
+                {
+                    stateChange(State::LANDED);
+                }
+            }
+            else
+            {
+                landedTicker == 0;
+            }
+        }
+        else if (state == State::LANDED)
+        {
+            vTaskSuspend(detectEventsTaskHandle);
+        }
+    }
+}
+
+void logData(void *param)
+{
+    for (;;)
+    {
+        if (loggingData)
+        {
+            if (lastHistoryEntry >= HISTORY_INTERVAL)
+            {
+#ifdef RAM_LOG_ENABLED
+                altitudeHistory[logIndex] = altitude;
+                speedHistory[logIndex] = verticalVelocity;
+                logIndex++;
+                if (logIndex >= HISTORY_SIZE)
+                {
+                    printlnlog("Log full!");
+                    loggingData = false;
+                }
 #endif
 #ifdef SD_CARD
-            if (flightFilesReady)
-            {
-                dataFile.printf("%i,%f,%f,%f,%f\n", currentTime, altitude, verticalVelocity, bmpTemperature, pressure);
-            }
+                if (flightFilesReady)
+                {
+                    dataFile.printf("%i,%f,%f,%f,%f\n", currentTime, altitude, verticalVelocity, bmpTemperature, pressure);
+                }
 #endif
 #ifdef FLUSH_EVERY
-            flushCounterData++;
-            if (flushCounterData >= FLUSH_EVERY)
-            {
-                dataFile.flush();
-            }
+                flushCounterData++;
+                if (flushCounterData >= FLUSH_EVERY)
+                {
+                    dataFile.flush();
+                }
 #endif
+            }
+            lastHistoryEntry += deltaTime;
         }
-        lastHistoryEntry += deltaTime;
     }
+    vTaskDelay(LOG_INTERVAL);
 }
 
 void pollImu()
@@ -629,276 +757,125 @@ void systemReport()
     // TODO: reset of stats
 }
 
-void tick()
+void updateOutputs(void *params)
 {
-    if (stateChanged != 0)
+    for (;;)
     {
-        stateChanged--;
-    }
-
-    if (activeCommand == Command::SET_BUZZER)
-    {
-        buzzerState = commandArgs[0] == "1";
-    }
-    else if (activeCommand == Command::SYSTEM_REPORT)
-    {
-        systemReport();
-    }
-    if (state == State::IDLE)
-    {
-
-        if (stateChanged == 1)
+        if (buzzerState)
         {
-            initalPresure = pressure; // First tick in cal mode, set initalPressure
+            tone(SysSettings.buzzerPin, 2000, 500);
         }
         else
         {
-            calibrate_done = true; // ?
-            // Add current to inital presure & divide by two ("running" avgerage) [TODO: check this]
-            initalPresure += pressure;
-            initalPresure /= 2;
+            digitalWrite(SysSettings.buzzerPin, LOW);
         }
-        if (activeCommand == Command::ARM)
-        {
-            stateChange(State::ARMED);
-        }
-        else if (activeCommand == Command::SET_FLIGHT)
-        {
 
-            ActiveFlightSettings.drougeChuteEnabled = commandArgBuffer[0] == 1;
-            ActiveFlightSettings.dualDeploymentEnabled = commandArgBuffer[1] == 1;
-            // mainDeploymentAltitude is uint16_t, so we need to combine the two bytes
-            ActiveFlightSettings.mainDeploymentAltitude = (commandArgBuffer[2] << 8) || commandArgs[3];
-
-            printlogf("Set flight config: Dual Deploy: %s, Drouge Deploy: %s, Main Deploy Alt: %s\n",
-                      ActiveFlightSettings.dualDeploymentEnabled ? "YES" : "NO",
-                      ActiveFlightSettings.drougeChuteEnabled ? "YES" : "NO",
-                      ActiveFlightSettings.dualDeploymentEnabled ? String(ActiveFlightSettings.mainDeploymentAltitude) : "N/A");
-            flightConfigured = true;
-            activeCommand = Command::NONE;
-        }
-    }
-    else
-    {
-        if (state == State::ARMED)
+        // Status LED
+        if (stateChanged == 1)
         {
-            if (activeCommand == Command::UNARM)
+            ledPatternStage = 0;
+            lastLedEvent = currentTime;
+        }
+        if (lastLedEvent == 0)
+        {
+            lastLedEvent = currentTime;
+            ledPatternStage = 0;
+            digitalWrite(SysSettings.statusLedPin, HIGH);
+        }
+        if (state == State::IDLE)
+        {
+            if (currentTime - lastLedEvent >= idleLedPattern[ledPatternStage])
             {
-                stateChange(State::IDLE);
-            }
-            else
-            {
-                // We are looking for a takeoff event
-                if (altitude >= LAUNCH_DETECT_THRESHOLD)
+                lastLedEvent = currentTime;
+                if (ledPatternStage % 2 == 0)
                 {
-                    launchDetectTicker++;
-                    if (launchDetectTicker == 1)
-                    {
-                        launchEventTimestamp = currentTime;
-                        loggingData = true;
-                    }
-                    if (launchDetectTicker == LAUNCH_DETECT_TICKS)
-                    {
-                        // Launch Event detected
-                        stateChange(State::ASCENT);
-                    }
+                    digitalWrite(SysSettings.statusLedPin, LOW);
                 }
                 else
                 {
-                    launchDetectTicker = 0;
-                    loggingData = false;
-                    logIndex = 0;
+                    digitalWrite(SysSettings.statusLedPin, HIGH);
                 }
-            }
-        }
-        else if (state == State::ASCENT)
-        {
-            // Are we still in-ascent
-            if (altitude > peakAltitude)
-            {
-                peakAltitude = altitude;
-                descentTicker = 0;
-            }
-            else if (peakAltitude - altitude >= LAUNCH_DETECT_THRESHOLD)
-            {
-                descentTicker++;
-                if (descentTicker == 1)
+                ledPatternStage++;
+                if (ledPatternStage >= 4)
                 {
-                    apoggeeEventTimestamp = currentTime;
+                    ledPatternStage = 0;
+                    digitalWrite(SysSettings.statusLedPin, HIGH);
                 }
-                if (descentTicker == LAUNCH_DETECT_TICKS)
+            }
+        }
+        else if (state == State::CALIBRATE)
+        {
+            if (lastLedEvent == 0)
+            {
+                lastLedEvent = currentTime;
+                digitalWrite(SysSettings.statusLedPin, HIGH);
+            }
+            else if (currentTime - lastLedEvent >= calibrateLedPattern[ledPatternStage])
+            {
+                lastLedEvent = currentTime;
+                if (ledPatternStage == 0)
                 {
-                    stateChange(State::DESCENT);
+                    ledPatternStage = 1;
+                    digitalWrite(SysSettings.statusLedPin, LOW);
                 }
-            }
-        }
-        else if (state == State::DESCENT)
-        {
-            buzzerState = true;
-            if (stateChanged == 1 && ActiveFlightSettings.drougeChuteEnabled)
-            {
-                // Fire drouge chute
-                firePyroCH(0);
-            }
-            else if (ActiveFlightSettings.dualDeploymentEnabled && !mainChuteFired && altitude <= ActiveFlightSettings.mainDeploymentAltitude)
-            {
-                // Fire dual-deployment main chute
-                firePyroCH(1);
-            }
-            if (verticalVelocity >= LANDED_DETECT_THRESHOLD_LOW && verticalVelocity <= LANDED_DETECT_THRESHOLD_HIGH)
-            {
-                landedTicker++;
-                if (landedTicker == 1)
+                else
                 {
-                    landingEventTimestamp = currentTime;
+
+                    ledPatternStage = 0;
+                    digitalWrite(SysSettings.statusLedPin, HIGH);
                 }
-                if (landedTicker == LANDED_DETECT_TICKS)
+            }
+        }
+        else if (state == State::ARMED)
+        {
+            if (lastLedEvent == 0)
+            {
+                lastLedEvent = currentTime;
+                digitalWrite(SysSettings.statusLedPin, HIGH);
+            }
+            else if (currentTime - lastLedEvent >= armedLedPattern[ledPatternStage])
+            {
+                lastLedEvent = currentTime;
+                if (ledPatternStage == 0)
                 {
-                    stateChange(State::LANDED);
+                    ledPatternStage = 1;
+                    digitalWrite(SysSettings.statusLedPin, LOW);
+                }
+                else
+                {
+
+                    ledPatternStage = 0;
+                    digitalWrite(SysSettings.statusLedPin, HIGH);
                 }
             }
-            else
-            {
-                landedTicker == 0;
-            }
         }
-        else if (state == State::LANDED)
+        else if (state == State::GROUNDSTATION)
         {
-
-            if (stateChanged == 1)
+            if (lastLedEvent == 0)
             {
-                loggingData = false;
-                finalLogIndex = logIndex;
-#ifdef SD_CARD
-                eventEntry("Landed, ending flight");
-                closeFlightFiles();
-#endif
-                report();
-            }
-        }
-    }
-}
-
-void updateOutputs()
-{
-    if (buzzerState)
-    {
-        tone(SysSettings.buzzerPin, 2000, 500);
-    }
-    else
-    {
-        digitalWrite(SysSettings.buzzerPin, LOW);
-    }
-
-    if (currentTime - lastLogEvent >= LOG_INTERVAL)
-    {
-        lastLogEvent = currentTime;
-        minimalLog();
-    }
-    // Status LED
-    if (stateChanged == 1)
-    {
-        ledPatternStage = 0;
-        lastLedEvent = currentTime;
-    }
-    if (lastLedEvent == 0)
-    {
-        lastLedEvent = currentTime;
-        ledPatternStage = 0;
-        digitalWrite(SysSettings.statusLedPin, HIGH);
-    }
-    if (state == State::IDLE)
-    {
-        if (currentTime - lastLedEvent >= idleLedPattern[ledPatternStage])
-        {
-            lastLedEvent = currentTime;
-            if (ledPatternStage % 2 == 0)
-            {
-                digitalWrite(SysSettings.statusLedPin, LOW);
-            }
-            else
-            {
+                lastLedEvent = currentTime;
                 digitalWrite(SysSettings.statusLedPin, HIGH);
             }
-            ledPatternStage++;
-            if (ledPatternStage >= 4)
+            else if (currentTime - lastLedEvent >= groundLedPattern[ledPatternStage])
             {
-                ledPatternStage = 0;
-                digitalWrite(SysSettings.statusLedPin, HIGH);
+                lastLedEvent = currentTime;
+                if (ledPatternStage % 2 == 0)
+                {
+                    digitalWrite(SysSettings.statusLedPin, LOW);
+                }
+                else
+                {
+                    digitalWrite(SysSettings.statusLedPin, HIGH);
+                }
+                ledPatternStage++;
+                if (ledPatternStage >= 4)
+                {
+                    ledPatternStage = 0;
+                    digitalWrite(SysSettings.statusLedPin, HIGH);
+                }
             }
         }
-    }
-    else if (state == State::CALIBRATE)
-    {
-        if (lastLedEvent == 0)
-        {
-            lastLedEvent = currentTime;
-            digitalWrite(SysSettings.statusLedPin, HIGH);
-        }
-        else if (currentTime - lastLedEvent >= calibrateLedPattern[ledPatternStage])
-        {
-            lastLedEvent = currentTime;
-            if (ledPatternStage == 0)
-            {
-                ledPatternStage = 1;
-                digitalWrite(SysSettings.statusLedPin, LOW);
-            }
-            else
-            {
-
-                ledPatternStage = 0;
-                digitalWrite(SysSettings.statusLedPin, HIGH);
-            }
-        }
-    }
-    else if (state == State::ARMED)
-    {
-        if (lastLedEvent == 0)
-        {
-            lastLedEvent = currentTime;
-            digitalWrite(SysSettings.statusLedPin, HIGH);
-        }
-        else if (currentTime - lastLedEvent >= armedLedPattern[ledPatternStage])
-        {
-            lastLedEvent = currentTime;
-            if (ledPatternStage == 0)
-            {
-                ledPatternStage = 1;
-                digitalWrite(SysSettings.statusLedPin, LOW);
-            }
-            else
-            {
-
-                ledPatternStage = 0;
-                digitalWrite(SysSettings.statusLedPin, HIGH);
-            }
-        }
-    }
-    else if (state == State::GROUNDSTATION)
-    {
-        if (lastLedEvent == 0)
-        {
-            lastLedEvent = currentTime;
-            digitalWrite(SysSettings.statusLedPin, HIGH);
-        }
-        else if (currentTime - lastLedEvent >= groundLedPattern[ledPatternStage])
-        {
-            lastLedEvent = currentTime;
-            if (ledPatternStage % 2 == 0)
-            {
-                digitalWrite(SysSettings.statusLedPin, LOW);
-            }
-            else
-            {
-                digitalWrite(SysSettings.statusLedPin, HIGH);
-            }
-            ledPatternStage++;
-            if (ledPatternStage >= 4)
-            {
-                ledPatternStage = 0;
-                digitalWrite(SysSettings.statusLedPin, HIGH);
-            }
-        }
+        vTaskDelay(50);
     }
 }
 
@@ -995,7 +972,28 @@ bool commandPacketCallback(uint8_t *responsePacketBuffer, uint8_t *responsePacke
         else
             reason = 1;
         break;
-        
+
+    case Command::SET_FLIGHT:
+        if (argsCount == 4 && argsArrayLength == 4)
+        {
+            ActiveFlightSettings.drougeChuteEnabled = args[0] == 1;
+            ActiveFlightSettings.dualDeploymentEnabled = args[1] == 1;
+            // mainDeploymentAltitude is uint16_t, so we need to combine the two bytes
+            ActiveFlightSettings.mainDeploymentAltitude = (args[2] << 8) || args[3];
+
+            printlogf("Set flight config: Dual Deploy: %s, Drouge Deploy: %s, Main Deploy Alt: %s\n",
+                      ActiveFlightSettings.dualDeploymentEnabled ? "YES" : "NO",
+                      ActiveFlightSettings.drougeChuteEnabled ? "YES" : "NO",
+                      ActiveFlightSettings.dualDeploymentEnabled ? String(ActiveFlightSettings.mainDeploymentAltitude) : "N/A");
+            flightConfigured = true;
+            ackNack = true;
+        }
+        else
+        {
+            reason = 1;
+        }
+        break;
+
     default:
         reason = 4;
         break;
@@ -1005,22 +1003,4 @@ bool commandPacketCallback(uint8_t *responsePacketBuffer, uint8_t *responsePacke
     return ackNack;
 }
 
-void loop()
-{
-#ifndef SIM_MODE
-    currentTime = millis();
-    deltaTime = currentTime - previousTime;
-#endif
-    pollImu();
-    pollBmp();
-    pollGps();
-#ifdef SIM_MODE
-    deltaTime = currentTime - previousTime;
-#endif
-    tick();
-    updateOutputs();
-    logData();
-    delay(1);
-    previousTime = currentTime;
-}
 #endif

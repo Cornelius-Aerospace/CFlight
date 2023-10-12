@@ -46,7 +46,7 @@
 #define CSV_HEADER "time,altitude,z_velocity,airtemp,airpressure"
 // #define SD_CARD
 #define MAX_ARGS 8
-
+#define SENSOR_POLL_INTERVAL 5 // ms between sensor polls
 enum State
 {
     IDLE,
