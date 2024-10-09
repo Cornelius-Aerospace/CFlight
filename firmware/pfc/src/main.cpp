@@ -245,14 +245,14 @@ void initSensors()
     else
     {
         printlnlog("- Failed to connect to MPU6050!");
-        initErrorLoop();
+        initErrorLoop(SysSettings);
     }
     printlnlog("(BMP):");
     bmp_state = bmp.begin(BMP280_ADDRESS_ALT, BMP280_CHIPID);
     if (!bmp_state)
     {
         printlnlog("- Failed to connect to BMP280!");
-        initErrorLoop();
+        initErrorLoop(SysSettings);
     }
     else
     {
@@ -270,6 +270,9 @@ void initSensors()
     printlnlog("Connecting to GPS...");
     Serial2.begin(9600, SERIAL_8N1, SysSettings.gpsRxPin, SysSettings.gpsTxPin);
     printlnlog("- Done! GPS online");
+#else
+    bmp_state = true;
+    mpu_state = true;
 #endif
 }
 
@@ -361,6 +364,7 @@ void setup()
     // initialize serial communication
     Serial.begin(115200);
     SysSettings = SystemSettings();
+    ActiveFlightSettings = FlightSettings();
     printlnlog("CFlight v" + String(VERSION));
     pinMode(SysSettings.statusLedPin, OUTPUT);
     pinMode(SysSettings.errorLedPin, OUTPUT);
@@ -426,7 +430,8 @@ void detectEvents(void *param)
             continue;
         }
         // Fresh sensor data is available
-        if (stateChanged != 0) stateChanged -= 1;
+        if (stateChanged != 0)
+            stateChanged -= 1;
         if (state == State::IDLE)
         {
             if (initalPresure == 0.0)
@@ -1003,4 +1008,7 @@ bool commandPacketCallback(uint8_t *responsePacketBuffer, uint8_t *responsePacke
     return ackNack;
 }
 
+void loop() {
+    // Do nothing, everything is handled in tasks
+}
 #endif

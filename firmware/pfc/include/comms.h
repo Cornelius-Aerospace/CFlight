@@ -15,7 +15,7 @@ enum PacketType
     ACK = 5,
     CODE = 6,
     HANDSHAKE = 7,
-    ERROR = 8,
+    PACKET_ERROR = 8,
     REPORT = 9,
 };
 

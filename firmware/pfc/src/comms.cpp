@@ -391,6 +391,6 @@ void initComms()
     else
     {
         Serial.println("ESPNow Init Failed");
-        initErrorLoop();
+        initErrorLoop(SystemSettings());
     }
 }

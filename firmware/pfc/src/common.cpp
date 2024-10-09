@@ -1,13 +1,13 @@
 #include "common.h"
 
-void initErrorLoop()
+void initErrorLoop(SystemSettings settings)
 {
-    digitalWrite(ERROR_LED, HIGH);
+    digitalWrite(settings.errorLedPin, HIGH);
     bool toggler = false;
     while (true)
     {
-        digitalWrite(STATUS_LED, toggler);
-        digitalWrite(BUZZER_PIN, toggler);
+        digitalWrite(settings.statusLedPin, toggler);
+        digitalWrite(settings.buzzerPin, toggler);
         toggler = !toggler;
         delay(500);
     }

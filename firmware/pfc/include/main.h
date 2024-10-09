@@ -79,15 +79,14 @@ uint16_t flight_id = 0;
 MPU6050 accelgyro;   // I2C MPU6050 IMU
 Adafruit_BMP280 bmp; // I2C bmp280 barometer for altitude
 TinyGPSPlus gps;     // Serial GPS
+#endif
 
 bool mpu_state = false;
 bool bmp_state = false;
-#endif
 
-SystemSettings SysSettings;
-FlightSettings ActiveFlightSettings;
 bool flightConfigured = false;
-
+SystemSettings SysSettings = SystemSettings();
+FlightSettings ActiveFlightSettings = FlightSettings();
 // Command holders from comms.h
 extern unsigned long commandSalt;
 extern uint8_t commandInt;

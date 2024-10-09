@@ -81,5 +81,14 @@ public:
         this->dualDeploymentEnabled = dualDeploymentEnabled;
         this->drougeChuteDeploymentDelay = drougeChuteDeploymentDelay;
     }
+    
+    FlightSettings() { // Default settings
+        this->mainDeploymentAltitude = 200;
+        this->drougeChuteEnabled = false;
+        this->dualDeploymentEnabled = false;
+        this->drougeChuteDeploymentDelay = false;
+    }
 };
+
+
 #endif

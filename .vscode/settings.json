@@ -6,5 +6,10 @@
         "*.pyde": "python",
         "random": "cpp"
     },
-    "python.analysis.typeCheckingMode": "basic"
+    "python.analysis.typeCheckingMode": "basic",
+    "workbench.colorCustomizations": {
+        "activityBar.background": "#21312A",
+        "titleBar.activeBackground": "#2E443B",
+        "titleBar.activeForeground": "#FAFCFB"
+    }
 }
