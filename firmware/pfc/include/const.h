@@ -3,8 +3,11 @@
 
 #define DEBUG // Comment out to disable debug messages
 // #define COMM_TEST
+// #define SIM_MODE // comment out for physical use of sensors
+// #define GPS_CONNECTED // comment out if GPS not connected
+#define AUTO_ARM
 
-#define VERSION "0.2.0"
+#define VERSION "0.3.0"
 #define MASTER_CODE 202910
 #define TEMP_ARM_CODE 12345
 // // I2C pins (SDA, SCL)
@@ -35,13 +38,15 @@
 #define LANDED_DETECT_THRESHOLD_HIGH 0.4 // Meters
 #define LANDED_DETECT_TICKS 100           // Number of ticks with subthreshold altitude change for landing event
 
-#define LOG_INTERVAL 1000 // ms between (minimal) data log
+#define LOG_INTERVAL 100 // ms between (minimal) data log
 #define SPEED_INTERVAL 50 // ms between speed calculations
 
-// #define RAM_LOG_ENABLED
+#define RAM_LOG_ENABLED // Enable logging to RAM buffer
+
+#ifdef RAM_LOG_ENABLED
 #define HISTORY_SIZE 10000  // max dynamically allocated DRAM (15KB) https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/memory-types.html
-#define HISTORY_INTERVAL 50 // ms between history updates
 #define LOG_SENSOR_COUNT 2  // Altitude, Vertical Velocity
+#endif
 
 #define CSV_HEADER "time,altitude,z_velocity,airtemp,airpressure"
 // #define SD_CARD

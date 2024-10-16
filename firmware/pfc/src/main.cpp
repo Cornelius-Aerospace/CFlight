@@ -7,12 +7,12 @@ void listDir(const char *dirname, uint8_t levels)
     File root = SD.open(dirname);
     if (!root)
     {
-        printlnlog("Failed to open directory");
+        printlnlog("- Failed to open directory!");
         return;
     }
     if (!root.isDirectory())
     {
-        printlnlog("Not a directory");
+        printlnlog("- Not a directory!");
         return;
     }
 
@@ -44,11 +44,11 @@ void createDir(const char *path)
     printlogf("Creating Dir: %s\n", path);
     if (SD.mkdir(path))
     {
-        printlnlog("Dir created");
+        printlnlog("- Dir created");
     }
     else
     {
-        printlnlog("mkdir failed");
+        printlnlog("- mkdir failed!");
     }
 }
 
@@ -59,11 +59,11 @@ void readFile(const char *path)
     File file = SD.open(path);
     if (!file)
     {
-        printlnlog("Failed to open file for reading");
+        printlnlog("- Failed to open file for reading!");
         return;
     }
 
-    printlog("Read from file: ");
+    printlog("- Read from file: ");
     while (file.available())
     {
         Serial.write(file.read());
@@ -78,16 +78,16 @@ void writeFile(const char *path, const char *message)
     File file = SD.open(path, FILE_WRITE);
     if (!file)
     {
-        printlnlog("Failed to open file for writing");
+        printlnlog("- Failed to open file for writing!");
         return;
     }
     if (file.print(message))
     {
-        printlnlog("File written");
+        printlnlog("- File written");
     }
     else
     {
-        printlnlog("Write failed");
+        printlnlog("- Write failed!");
     }
     file.close();
 }
@@ -99,16 +99,16 @@ void appendFile(const char *path, const char *message)
     File file = SD.open(path, FILE_APPEND);
     if (!file)
     {
-        printlnlog("Failed to open file for appending");
+        printlnlog("- Failed to open file for appending!");
         return;
     }
     if (file.print(message))
     {
-        printlnlog("Message appended");
+        printlnlog("- Message appended");
     }
     else
     {
-        printlnlog("Append failed");
+        printlnlog("- Append failed!");
     }
     file.close();
 }
@@ -139,6 +139,7 @@ uint16_t createFlightFiles(uint16_t flight_id)
 
 void closeFlightFiles()
 {
+    printlnlog("Closing flight files");
     logFile.close();
     eventsFile.close();
     dataFile.close();
@@ -149,14 +150,14 @@ void initSD()
     printlnlog("Init SD card");
     if (!SD.begin(5, SPI, 4000000U, "/sd", 5, true))
     {
-        printlnlog("Card Mount Failed");
+        printlnlog("- Card Mount Failed!");
         return;
     }
     uint8_t cardType = SD.cardType();
 
     if (cardType == CARD_NONE)
     {
-        printlnlog("No SD card attached");
+        printlnlog("- No SD card attached!");
         return;
     }
 
@@ -203,17 +204,40 @@ void loop()
 #else
 void allocateHistoryMemory()
 {
-    printlog("Allocating ");
+    printlnlog("Allocating history buffers:");
+    printlog("- Allocating ");
     printlog(HISTORY_SIZE * LOG_SENSOR_COUNT * sizeof(float));
     printlog(" Bytes for history buffers with: ");
     printlog(LOG_SENSOR_COUNT);
     printlnlog(" sensors");
-    printlogf("\n\navailable heap befor allocating %i\n", ESP.getFreeHeap());
-    printlogf("biggest free block: %i\n", heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    printlogf("- available heap before allocating %i\n", ESP.getFreeHeap());
+    printlogf("- biggest free block: %i\n", heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     altitudeHistory = (float *)calloc(HISTORY_SIZE, sizeof(float));
     speedHistory = (float *)calloc(HISTORY_SIZE, sizeof(float));
-    printlogf("\n\navailable heap after allocating %i\n", ESP.getFreeHeap());
-    printlogf("biggest free block: %i\n", heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    printlnlog("Allocated history buffers");
+    printlogf("- available heap after allocating %i\n", ESP.getFreeHeap());
+    printlogf("- biggest free block: %i\n", heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+}
+
+void updateAccelOffset(SystemSettings settings)
+{
+    if (settings.useImuOffsets)
+    {
+        printlnlog("(SystemSettings Change): Updating IMU offsets");
+        accelgyro.setXAccelOffset(settings.axOffset);
+        accelgyro.setYAccelOffset(settings.ayOffset);
+        accelgyro.setZAccelOffset(settings.azOffset);
+        accelgyro.setXGyroOffset(settings.gxOffset);
+        accelgyro.setYGyroOffset(settings.gyOffset);
+        accelgyro.setZGyroOffset(settings.gzOffset);
+    }
+}
+
+void updateSystemSettings(SystemSettings newSystemSettings)
+{
+    printlnlog("System Settings Updated!");
+    SysSettings = newSystemSettings;
+    updateAccelOffset(SysSettings);
 }
 
 void initSensors()
@@ -261,21 +285,24 @@ void initSensors()
     }
     printlnlog("- Setting BMP280 parameters...");
     bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,   /* Operating Mode. */
-                    Adafruit_BMP280::SAMPLING_X2,   /* Temp. oversampling */
+                    Adafruit_BMP280::SAMPLING_X1,   /* Temp. oversampling */
                     Adafruit_BMP280::SAMPLING_X16,  /* Pressure oversampling */
                     Adafruit_BMP280::FILTER_X16,    /* Filtering. */
                     Adafruit_BMP280::STANDBY_MS_1); /* Standby time. */
 
     printlnlog("- Done! BMP online");
+#ifdef GPS_CONNECTED
     printlnlog("Connecting to GPS...");
     Serial2.begin(9600, SERIAL_8N1, SysSettings.gpsRxPin, SysSettings.gpsTxPin);
     printlnlog("- Done! GPS online");
+#endif
 #endif
 }
 
 void pollGps()
 {
 #ifndef SIM_MODE
+#ifdef GPS_CONNECTED
     while (Serial2.available())
         gps.encode(Serial2.read());
 
@@ -309,6 +336,7 @@ void pollGps()
     {
         // printlnlog("No GPS detected: check wiring.");
     }
+#endif
 #endif
 }
 
@@ -345,6 +373,7 @@ uint16_t readFlightId()
 
 bool saveMetaData()
 {
+#ifdef SD_CARD
     fs::File file = SD.open("/cflight.yaml", FILE_WRITE);
     if (!file)
     {
@@ -353,6 +382,7 @@ bool saveMetaData()
     }
     file.printf("flightId:%i\n", flight_id);
     file.close();
+#endif
     return true;
 }
 
@@ -380,6 +410,7 @@ void setup()
     printlnlog("Boot complete!");
     previousTime = millis();
     currentTime = millis();
+    lastSpeedMeasurement = millis();
 #ifdef SIM_MODE
     commandCollector = "";
     printlnlog("Sim mode: awaiting packets");
@@ -397,10 +428,11 @@ void setup()
 
 void registerTasks()
 {
-    xTaskCreate(detectEvents, "detectEvents", 1000, NULL, 1, &detectEventsTaskHandle);
-    xTaskCreate(pollSensors, "pollSensors", 1000, NULL, 1, &pollSensorsTaskHandle);
-    xTaskCreate(logData, "logData", 1000, NULL, 1, &logDataTaskHandle);
-    xTaskCreate(updateOutputs, "updateOutputs", 1000, NULL, 1, &updateOutputsTaskHandle);
+    xTaskCreate(detectEvents, "detectEvents", 2048, NULL, 2, &detectEventsTaskHandle);
+    xTaskCreate(pollSensors, "pollSensors", 2048, NULL, 2, &pollSensorsTaskHandle);
+    xTaskCreate(logData, "logData", 2048, NULL, 2, &logDataTaskHandle);
+    xTaskCreate(updateOutputs, "updateOutputs", 2048, NULL, 1, &updateOutputsTaskHandle);
+    xTaskCreate(systemReportTask, "systemReport", 2048, NULL, 1, &systemReportTaskHandle);
 }
 
 void pollSensors(void *param)
@@ -409,7 +441,9 @@ void pollSensors(void *param)
     {
         pollImu();
         pollBmp();
+#ifdef GPS_CONNECTED
         pollGps();
+#endif
         vTaskDelay(SENSOR_POLL_INTERVAL);
         xTaskNotifyGiveIndexed(detectEventsTaskHandle, 0);
     }
@@ -426,7 +460,8 @@ void detectEvents(void *param)
             continue;
         }
         // Fresh sensor data is available
-        if (stateChanged != 0) stateChanged -= 1;
+        if (stateChanged != 0)
+            stateChanged -= 1;
         if (state == State::IDLE)
         {
             if (initalPresure == 0.0)
@@ -445,7 +480,7 @@ void detectEvents(void *param)
         {
 
             // We are looking for a takeoff event
-            if (altitude >= LAUNCH_DETECT_THRESHOLD)
+            if (altitude >= LAUNCH_DETECT_THRESHOLD) // TODO: also look at x axis of accelerometer crossing from negative to positive (ie gravity being counter-acted by acceleration by motor)
             {
                 launchDetectTicker++;
                 if (launchDetectTicker == 1)
@@ -457,6 +492,7 @@ void detectEvents(void *param)
                 {
                     // Launch Event detected
                     stateChange(State::ASCENT);
+                    loggingData = true;
                 }
             }
             else
@@ -508,6 +544,10 @@ void detectEvents(void *param)
         }
         else if (state == State::LANDED)
         {
+            printlnlog("Landing detected; Ending event detection & system report tasks");
+            report(); // Print flight report
+            vTaskSuspend(systemReportTaskHandle);
+            vTaskSuspend(logDataTaskHandle);
             vTaskSuspend(detectEventsTaskHandle);
         }
     }
@@ -519,33 +559,29 @@ void logData(void *param)
     {
         if (loggingData)
         {
-            if (lastHistoryEntry >= HISTORY_INTERVAL)
-            {
 #ifdef RAM_LOG_ENABLED
-                altitudeHistory[logIndex] = altitude;
-                speedHistory[logIndex] = verticalVelocity;
-                logIndex++;
-                if (logIndex >= HISTORY_SIZE)
-                {
-                    printlnlog("Log full!");
-                    loggingData = false;
-                }
+            altitudeHistory[logIndex] = altitude;
+            speedHistory[logIndex] = verticalVelocity;
+            logIndex++;
+            if (logIndex >= HISTORY_SIZE)
+            {
+                printlnlog("Log full! Stopping flight log");
+                loggingData = false;
+            }
 #endif
 #ifdef SD_CARD
-                if (flightFilesReady)
-                {
-                    dataFile.printf("%i,%f,%f,%f,%f\n", currentTime, altitude, verticalVelocity, bmpTemperature, pressure);
-                }
+            if (flightFilesReady)
+            {
+                dataFile.printf("%i,%f,%f,%f,%f\n", currentTime, altitude, verticalVelocity, bmpTemperature, pressure);
+            }
 #endif
 #ifdef FLUSH_EVERY
-                flushCounterData++;
-                if (flushCounterData >= FLUSH_EVERY)
-                {
-                    dataFile.flush();
-                }
-#endif
+            flushCounterData++;
+            if (flushCounterData >= FLUSH_EVERY)
+            {
+                dataFile.flush();
             }
-            lastHistoryEntry += deltaTime;
+#endif
         }
     }
     vTaskDelay(LOG_INTERVAL);
@@ -565,6 +601,7 @@ void pollBmp()
     pressure /= 100;                        // Now in MPa
     bmpTemperature = bmp.readTemperature(); // Deg c
 #endif
+    deltaTime = lastSpeedMeasurement - millis();
     speedTicker += deltaTime;
     altitude = 44330 * (1.0 - pow(pressure / initalPresure, 0.1903)); // meters
 
@@ -577,7 +614,7 @@ void pollBmp()
     if (speedTicker >= SPEED_INTERVAL)
     {
         // SPEED_INTERVAL has passed, calculate vertical speed
-
+        lastSpeedMeasurement = currentTime;
         verticalVelocity = (altitude - previousAltitude); // Delta meters
         verticalVelocity /= speedTicker / 1000;
 
@@ -626,14 +663,17 @@ bool firePyroCH(uint8_t channel)
 
 void eventEntry(char *s)
 {
+#ifdef SD_CARD
     eventsFile.printf("[%s] %s", formatTimestamp(currentTime), s);
     eventsFile.println();
+
 #ifdef FLUSH_EVERY
     flushCounterEvents++;
     if (flushCounterEvents >= FLUSH_EVERY)
     {
         eventsFile.flush();
     }
+#endif
 #endif
 }
 
@@ -648,6 +688,7 @@ void stateChange(State newState)
     // Update master arm
     if (newState == State::ARMED)
     {
+        Serial.println("MFC: ARMED");
 #ifdef SD_CARD
         saveMetaData();
         createFlightFiles(flight_id);
@@ -711,17 +752,23 @@ void report()
     printlog("Flight time: ");
     humanLogTimestamp(landingEventTimestamp - launchEventTimestamp);
     printlnlog();
-    /*printlnlog("-- Data --");
+#ifdef RAM_LOG_ENABLED
+    printlog("Used: ");
+    printlog((float)logIndex / (float)HISTORY_SIZE);
+    printlnlog("% of RAM history buffer");
+    printlnlog("-- (RAM) Flight History Data --");
     printlnlog("time,altitude,speed");
     for (uint8_t i = 0; i < finalLogIndex; i++)
     {
-        printlog(i * HISTORY_INTERVAL);
+        printlog(i * LOG_INTERVAL);
         printlog(",");
         printlog(altitudeHistory[i]);
         printlog(",");
         printlog(speedHistory[i]);
         printlnlog();
-    }*/
+    }
+    printlnlog("-- End RAM Flight History Data --");
+#endif
     printlnlog("End of report");
 }
 
@@ -733,9 +780,10 @@ float cpuTemp()
 void systemReport()
 {
     printlnlog("- System Report -");
-    printlogf("Operation Status: %s ", operationStatus ? "OK" : "ERROR");
+    // printlogf("Operation Status: %s \n", operationStatus ? "OK" : "ERROR");
     printlogf("Uptime: %s, ", formatTimestamp(currentTime));
     printlogf("Errors: %i\n", errorCount);
+#ifdef GPS_CONNECTED
     printlogf("GPS. Sat Fix: %s, Sat count: %i,", gpsFix ? "YES" : "NO", gpsSatilliteCount);
     printlogf(" HDOP: %i, ", gpsHdop);
     if (gpsFix)
@@ -743,18 +791,30 @@ void systemReport()
         printlogf("Lat: %f, Long: %f, Speed: %f", gpsLatitude, gpsLongitude, gpsSpeed);
     }
     printlnlog();
+#endif
 
-    printlogf("BMP. State: %s,", bmp_state ? "OK" : "ERROR");
-    printlogf(" Pressure: %fMPa, Temperature: %f°C,", pressure, bmpTemperature);
+    printlogf("BMP. State: %s\n", bmp_state ? "OK" : "ERROR");
+    printlogf(" Pressure: %fMPa, Temperature: %f°C\n", pressure, bmpTemperature);
     printlogf(" Altitude: %fm, Base Pressure: %fMPa\n", altitude, initalPresure);
 
-    printlogf("IMU. State: %s, ", mpu_state ? "OK" : "ERROR");
-    printlogf("Ax: %i Ay: %i Az: %i, ", ax, ay, az);
+    printlogf("IMU. State: %s\n ", mpu_state ? "OK" : "ERROR");
+    printlogf("Ax: %i Ay: %i Az: %i\n", ax, ay, az);
     printlogf("Gx: %i Gy: %i Gz: %i\n", gx, gy, gz);
 
-    printlogf("Device. Cpu Temperature %f, State: ", cpuTemp(), StateNames[state]);
+    printlogf("DEVICE. Cpu Temperature %f, State: %s\n", cpuTemp(), StateNames[state]);
+#ifdef SD_CARD
     printlogf("SD card. State: %s \n", sdReady ? "READY" : "ERROR");
+#endif
     // TODO: reset of stats
+}
+
+void systemReportTask(void *params)
+{
+    for (;;)
+    {
+        systemReport();
+        vTaskDelay(1000);
+    }
 }
 
 void updateOutputs(void *params)
@@ -881,6 +941,7 @@ void updateOutputs(void *params)
 
 void saveFlight()
 {
+    // TODO: Implement!
     printlnlog("Unimplemented");
 }
 
@@ -922,8 +983,15 @@ bool commandPacketCallback(uint8_t *responsePacketBuffer, uint8_t *responsePacke
 
         break;
     case Command::UNARM:
-        stateChange(State::IDLE);
-        ackNack = true;
+        if (state == State::ARMED)
+        {
+            stateChange(State::IDLE);
+            ackNack = true;
+        }
+        else
+        {
+            reason = 3;
+        }
         break;
     case Command::SET_BUZZER:
         if (argsCount == 1 && argsArrayLength == 1)
@@ -1003,4 +1071,28 @@ bool commandPacketCallback(uint8_t *responsePacketBuffer, uint8_t *responsePacke
     return ackNack;
 }
 
+void loop()
+{
+// Not really used as everything is done in tasks
+#ifdef AUTO_ARM
+    if (!autoArmed)
+    {
+        if (autoArmCalibratedBy == 0)
+        {
+            Serial.println("AutoArm enabled: entering calibration");
+            stateChange(State::CALIBRATE);
+            autoArmCalibratedBy = millis() + 500;
+        }
+        else if (autoArmCalibratedBy <= millis())
+        {
+            Serial.println("AutoArm enabled: Calibration finished; Arming");
+            stateChange(State::ARMED);
+            autoArmed = true;
+        }
+    }
+#endif
+    previousTime = currentTime;
+    currentTime = millis();
+    vTaskDelay(10);
+}
 #endif

@@ -2,12 +2,12 @@
 
 void initErrorLoop()
 {
-    digitalWrite(ERROR_LED, HIGH);
+    digitalWrite(SysSettings.errorLedPin, HIGH);
     bool toggler = false;
     while (true)
     {
-        digitalWrite(STATUS_LED, toggler);
-        digitalWrite(BUZZER_PIN, toggler);
+        digitalWrite(SysSettings.statusLedPin, toggler);
+        digitalWrite(SysSettings.buzzerPin, toggler);
         toggler = !toggler;
         delay(500);
     }
