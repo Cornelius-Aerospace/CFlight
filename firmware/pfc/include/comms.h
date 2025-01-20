@@ -34,6 +34,7 @@ extern uint8_t commandArgLength;
 extern uint8_t commandArgCount;
 extern byte commandArgBuffer[MAX_ARGS*4];
 
+
 void handshakeResponse(const uint8_t *macAddr);
 void setBaseMacAddress(const uint8_t *macAddr);
 

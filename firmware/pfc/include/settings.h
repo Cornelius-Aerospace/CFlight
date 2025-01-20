@@ -81,15 +81,17 @@ public:
         this->dualDeploymentEnabled = dualDeploymentEnabled;
         this->drougeChuteDeploymentDelay = drougeChuteDeploymentDelay;
     }
-    
-    FlightSettings() { // Default settings
+
+    FlightSettings()
+    {
         this->mainDeploymentAltitude = 200;
         this->drougeChuteEnabled = false;
         this->dualDeploymentEnabled = false;
-        this->drougeChuteDeploymentDelay = false;
+        this->drougeChuteDeploymentDelay = 0;
     }
 };
 
-SystemSettings SysSettings = SystemSettings();
-FlightSettings ActiveFlightSettings = FlightSettings();
+// Flight & System settings holder
+extern SystemSettings SysSettings;
+extern FlightSettings ActiveFlightSettings;
 #endif

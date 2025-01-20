@@ -44,6 +44,11 @@ unsigned long flushCounterEvents = 0;
 #endif
 char fmtBuffer[128] = ""; // Initialize the buffer as an empty string
 
+#ifdef AUTO_ARM
+unsigned long autoArmCalibratedBy = 0;
+bool autoArmed = false;
+#endif
+
 const unsigned long idleLedPattern[] = {
     LED_ON_SHORT,
     LED_OFF_SHORT,
@@ -93,7 +98,10 @@ extern uint8_t commandInt;
 extern Command command;
 extern uint8_t commandArgLength;
 extern uint8_t commandArgCount;
-extern byte commandArgBuffer[MAX_ARGS*4];
+extern byte commandArgBuffer[MAX_ARGS * 4];
+
+extern SystemSettings SysSettings;
+extern FlightSettings ActiveFlightSettings;
 
 int16_t ax, ay, az;
 int16_t gx, gy, gz;
@@ -101,6 +109,7 @@ float pressure, bmpTemperature, altitude, previousAltitude;
 
 unsigned long previousTime = 0;
 unsigned long currentTime = 0;
+unsigned long lastSpeedMeasurement = 0;
 unsigned long deltaTime = 0;
 
 float deltaAltitude = 0;
@@ -140,7 +149,7 @@ uint16_t ledPatternStage = 0;
 
 bool buzzerState = false;
 
-float initalPresure = 0.0;                                                              // Presure at launch pad
+float initalPresure = 0.0;                                                            // Presure at launch pad
 unsigned long launchEventTimestamp, apoggeeEventTimestamp, landingEventTimestamp = 0; // Time at which the events were detected
 unsigned long lastLogEvent = 0;
 
@@ -243,47 +252,44 @@ TaskHandle_t detectEventsTaskHandle = NULL;
 TaskHandle_t logDataTaskHandle = NULL;
 TaskHandle_t pollSensorsTaskHandle = NULL;
 TaskHandle_t updateOutputsTaskHandle = NULL;
+TaskHandle_t systemReportTaskHandle = NULL;
 
 // Function prototypes
-void printlogf(const char *format, ...);
-void humanLogTimestamp(unsigned long timestamp);
-String formatTimestamp(unsigned long timestamp);
-
-void setup();
-
-void registerTasks(); // Register tasks with the scheduler
-void initSensors();
-void allocateHistoryMemory();
-
 void listDir(const char *dirname, uint8_t levels);
 void createDir(const char *path);
 void readFile(const char *path);
 void writeFile(const char *path, const char *message);
 void appendFile(const char *path, const char *message);
 uint16_t createFlightFiles(uint16_t flight_id);
+void closeFlightFiles();
+void initSD();
+void setup();
+void loop();
+void allocateHistoryMemory();
+void updateAccelOffset(SystemSettings settings);
+void updateSystemSettings(SystemSettings newSystemSettings);
+void initSensors();
+void pollGps();
 uint16_t readFlightId();
 bool saveMetaData();
-void closeFlightFiles();
-void saveFlight();
-
-void pollGps();
-void initSD();
+void registerTasks();
+void pollSensors(void *param);
+void detectEvents(void *param);
+void logData(void *param);
 void pollImu();
 void pollBmp();
-
 bool firePyroCH(uint8_t channel);
+void eventEntry(char *s);
 void stateChange(State newState);
-
 void systemCheck();
-
+void humanLogTimestamp(unsigned long timestamp);
+String formatTimestamp(unsigned long timestamp);
 void report();
+float cpuTemp();
 void systemReport();
+void systemReportTask(void *params);
+void updateOutputs(void *params);
+void saveFlight();
 void minimalLog();
-
 bool commandPacketCallback(uint8_t *responsePacketBuffer, uint8_t *responsePacketLength, uint8_t *args, uint8_t argsCount, uint8_t argsArrayLength, Command cmd, unsigned long time, unsigned long salt);
-
-void pollSensors(void * param);
-void detectEvents(void * param);
-void logData(void * param);
-void updateOutputs(void * param);
 #endif
