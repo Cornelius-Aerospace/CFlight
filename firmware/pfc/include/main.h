@@ -19,6 +19,7 @@
 #include "common.h"
 #include "const.h"
 #include "settings.h"
+#include "flog.h"
 
 #ifdef __cplusplus
 extern "C"
