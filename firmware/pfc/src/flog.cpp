@@ -1,5 +1,17 @@
 #include <flog.h>
 
+SPIFlash storage(CS_PIN);
+
+// Look-up table details
+uint32_t lookup_table_begining; // Address where the look-up table begins
+uint32_t lookup_table_end;
+
+uint32_t flight_log_header_start;     // Address where the current FL header begins
+uint32_t flight_log_next_entry;       // Address where the next FL entry will begin
+unsigned long flight_log_entry_count; // The number of FL entries so far
+uint8_t flight_log_slot_id;                 // The number of the current FL's file slot
+bool flight_log_open;
+
 // Checksum functions
 // Both XOR checksums are from https://www.luisllamas.es/en/arduino-checksum/
 uint8_t XORChecksum8(const byte *data, size_t dataLength)

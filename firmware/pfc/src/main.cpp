@@ -269,14 +269,14 @@ void initSensors()
     else
     {
         printlnlog("- Failed to connect to MPU6050!");
-        initErrorLoop();
+        initErrorLoop(SysSettings);
     }
     printlnlog("(BMP):");
     bmp_state = bmp.begin(BMP280_ADDRESS_ALT, BMP280_CHIPID);
     if (!bmp_state)
     {
         printlnlog("- Failed to connect to BMP280!");
-        initErrorLoop();
+        initErrorLoop(SysSettings);
     }
     else
     {

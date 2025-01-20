@@ -7,17 +7,17 @@
 #define STORAGE_SPACE 16 // Total storage space in MB
 #define DATA_VERSION 1
 
-SPIFlash storage(CS_PIN);
+extern SPIFlash storage;
 
 // Look-up table details
-uint32_t lookup_table_begining; // Address where the look-up table begins
-uint32_t lookup_table_end;
+extern uint32_t lookup_table_begining; // Address where the look-up table begins
+extern uint32_t lookup_table_end;
 
-uint32_t flight_log_header_start;     // Address where the current FL header begins
-uint32_t flight_log_next_entry;       // Address where the next FL entry will begin
-unsigned long flight_log_entry_count; // The number of FL entries so far
-uint8_t flight_log_slot_id;                 // The number of the current FL's file slot
-bool flight_log_open;
+extern uint32_t flight_log_header_start;     // Address where the current FL header begins
+extern uint32_t flight_log_next_entry;       // Address where the next FL entry will begin
+extern unsigned long flight_log_entry_count; // The number of FL entries so far
+extern uint8_t flight_log_slot_id;                 // The number of the current FL's file slot
+extern bool flight_log_open;
 
 // Checksum functions
 uint8_t XORChecksum8(const byte *data, size_t dataLength);

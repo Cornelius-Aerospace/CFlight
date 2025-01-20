@@ -5,5 +5,5 @@
 #include <Arduino.h>
 extern SystemSettings SysSettings;
 extern FlightSettings ActiveFlightSettings;
-void initErrorLoop();
+void initErrorLoop(SystemSettings settings);
 #endif
