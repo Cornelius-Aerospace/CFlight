@@ -90,5 +90,6 @@ public:
     }
 };
 
-
+SystemSettings SysSettings = SystemSettings();
+FlightSettings ActiveFlightSettings = FlightSettings();
 #endif

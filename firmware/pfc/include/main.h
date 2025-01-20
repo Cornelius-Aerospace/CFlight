@@ -1,6 +1,6 @@
 #ifndef MAIN_H
 #define MAIN_H
-// #define SIM_MODE // comment out for physical use of sensors
+//#define SIM_MODE // comment out for physical use of sensors
 // Include libraries
 #include "I2Cdev.h"
 #ifndef SIM_MODE
@@ -85,8 +85,7 @@ bool mpu_state = false;
 bool bmp_state = false;
 
 bool flightConfigured = false;
-SystemSettings SysSettings = SystemSettings();
-FlightSettings ActiveFlightSettings = FlightSettings();
+
 // Command holders from comms.h
 extern unsigned long commandSalt;
 extern uint8_t commandInt;
