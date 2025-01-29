@@ -10,8 +10,6 @@
 #endif
 #include <Wire.h>
 #include "WiFi.h"
-#include "FS.h"
-#include "SD.h"
 #include "SPI.h"
 #include <time.h>
 
@@ -31,17 +29,6 @@ extern "C"
 #endif
 uint8_t temprature_sens_read();
 
-// #define FLUSH_EVERY 1000
-fs::File logFile;
-fs::File eventsFile;
-fs::File dataFile;
-bool sdReady = false;
-bool flightFilesReady = false;
-#ifdef FLUSH_EVERY
-unsigned long flushCounterLog = 0;
-unsigned long flushCounterData = 0;
-unsigned long flushCounterEvents = 0;
-#endif
 char fmtBuffer[128] = ""; // Initialize the buffer as an empty string
 
 #ifdef AUTO_ARM
@@ -123,6 +110,7 @@ const char *StateNames[] = {"IDLE", "CALIBRATE", "ARMED", "ASCENT", "DESCENT", "
 bool operationStatus = false;
 unsigned long errorCount = 0;
 
+bool hasFlown = false;
 State state = State::IDLE;
 uint8_t stateChanged = 0; // Has the state changed since last tick(); (0 - no, 1 - yes, 2 - state changing this tick (ignore))
 String commandCollector = "";
@@ -161,62 +149,27 @@ int32_t gpsHdop = 0;
 double gpsSpeed = 0.0;
 
 // Logging wrappers
+// TODO: log file on flash (in dedicated slot)
 template <typename T>
 inline void printlog(const T &value)
 {
     Serial.print(value);
-    if (flightFilesReady)
-        logFile.print(value);
-#ifdef FLUSH_EVERY
-    flushCounterLog++;
-    if (flushCounterLog >= FLUSH_EVERY)
-    {
-        logFile.flush();
-    }
-#endif
 }
 
 template <typename T>
 inline void printlnlog(const T &value)
 {
     Serial.println(value);
-    if (flightFilesReady)
-        logFile.println(value);
-#ifdef FLUSH_EVERY
-    flushCounterLog++;
-    if (flushCounterLog >= FLUSH_EVERY)
-    {
-        logFile.flush();
-    }
-#endif
 }
 
 inline void printlnlog()
 {
     Serial.println();
-    if (flightFilesReady)
-        logFile.println();
-#ifdef FLUSH_EVERY
-    flushCounterLog++;
-    if (flushCounterLog >= FLUSH_EVERY)
-    {
-        logFile.flush();
-    }
-#endif
 }
 
 inline void printlog()
 {
     Serial.println();
-    if (flightFilesReady)
-        logFile.println();
-#ifdef FLUSH_EVERY
-    flushCounterLog++;
-    if (flushCounterLog >= FLUSH_EVERY)
-    {
-        logFile.flush();
-    }
-#endif
 }
 const uint8_t maxStringLength = 255;
 char formattedString[maxStringLength];
@@ -255,14 +208,6 @@ TaskHandle_t updateOutputsTaskHandle = NULL;
 TaskHandle_t systemReportTaskHandle = NULL;
 
 // Function prototypes
-void listDir(const char *dirname, uint8_t levels);
-void createDir(const char *path);
-void readFile(const char *path);
-void writeFile(const char *path, const char *message);
-void appendFile(const char *path, const char *message);
-uint16_t createFlightFiles(uint16_t flight_id);
-void closeFlightFiles();
-void initSD();
 void setup();
 void loop();
 void allocateHistoryMemory();
@@ -289,7 +234,11 @@ float cpuTemp();
 void systemReport();
 void systemReportTask(void *params);
 void updateOutputs(void *params);
-void saveFlight();
 void minimalLog();
 bool commandPacketCallback(uint8_t *responsePacketBuffer, uint8_t *responsePacketLength, uint8_t *args, uint8_t argsCount, uint8_t argsArrayLength, Command cmd, unsigned long time, unsigned long salt);
+
+// Flight log
+void listSlotsToSerial();
+void dumpSlotToSerial(uint8_t slotID, uint8_t chunkSize = 256, bool fastRead = false);
+void writeSerialToSlot(uint8_t slotID, const char terminator = '\n', bool errorChecking = true);
 #endif

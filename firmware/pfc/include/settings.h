@@ -31,7 +31,7 @@ public:
     float landedDetectThresholdHigh;
     uint landedDetectTicks;
 
-    unsigned long logInterval;
+    unsigned long logFrequency;
     unsigned long speedInterval;
 
     SystemSettings()
@@ -61,7 +61,7 @@ public:
         landedDetectThresholdHigh = 0.4;
         landedDetectTicks = 100;
 
-        logInterval = 1000;
+        logFrequency = 50;
         speedInterval = 50;
     }
 };

@@ -1,13 +1,17 @@
 #ifndef FLIGHT_LOG_H
 #define FLIGHT_LOG_H
 
-#include "SPIMemory.h"
+#include "SdFat.h"
+#include "Adafruit_SPIFlash.h"
 
 #define CS_PIN 5         // Pin D5 is connected to the SPI flash chip's CS pin
 #define STORAGE_SPACE 16 // Total storage space in MB
 #define DATA_VERSION 1
+#define MAX_SLOT_COUNT 10
 
-extern SPIFlash storage;
+extern Adafruit_FlashTransport_SPI flashTransport;
+extern Adafruit_SPIFlash storage;
+extern FatFileSystem fatfs;
 
 // Look-up table details
 extern uint32_t lookup_table_begining; // Address where the look-up table begins
@@ -18,6 +22,15 @@ extern uint32_t flight_log_next_entry;       // Address where the next FL entry 
 extern unsigned long flight_log_entry_count; // The number of FL entries so far
 extern uint8_t flight_log_slot_id;                 // The number of the current FL's file slot
 extern bool flight_log_open;
+
+struct Slot {
+    uint8_t slotID;
+    uint32_t startAdress;
+    uint32_t endAddress;
+    byte statusByte;
+};
+
+bool beginStorage();
 
 // Checksum functions
 uint8_t XORChecksum8(const byte *data, size_t dataLength);
@@ -31,6 +44,7 @@ uint32_t getFlightLog(uint8_t slotID);                                          
 bool closeFlightLog(uint8_t slotID, uint32_t headerStart, uint32_t lastEntry, unsigned long entryCount); // Updates FL header with final values (called after flight ends)
 bool checkFLHeaderChecksum(uint32_t address);
 bool updateFLHeaderChecksum(uint32_t address);
+void resetFlightLog();
 
 // Slot functions
 bool createSlot(uint32_t size, byte status);
@@ -40,9 +54,11 @@ bool updateSlotStatus(uint8_t slotID, byte newStatus, bool errorCheck = true);
 bool getSlotStatus(uint8_t slotID, byte &output);
 bool deleteSlot(uint8_t slotID, bool errorCheck = true, bool fastRead = false);
 uint8_t nextSlotID();
+Slot getSlotInfo(uint8_t slotID, bool fastRead = false);
+bool doesSlotExist(uint8_t slotID, bool fastRead = false);
 
 // Lookup table functions
-bool createLookupTable(uint32_t address); // Creates FL lookup/partition table
+bool createLookupTable(); // Creates FL lookup/partition table
 bool updateLookupTableChecksum();
 bool doesLookupTableExist();
 

@@ -1,207 +1,4 @@
 #include "main.h"
-#ifdef SD_CARD
-void listDir(const char *dirname, uint8_t levels)
-{
-    printlogf("Listing directory: %s\n", dirname);
-
-    File root = SD.open(dirname);
-    if (!root)
-    {
-        printlnlog("- Failed to open directory!");
-        return;
-    }
-    if (!root.isDirectory())
-    {
-        printlnlog("- Not a directory!");
-        return;
-    }
-
-    File file = root.openNextFile();
-    while (file)
-    {
-        if (file.isDirectory())
-        {
-            printlog("  DIR : ");
-            printlnlog(file.name());
-            if (levels)
-            {
-                listDir(file.path(), levels - 1);
-            }
-        }
-        else
-        {
-            printlog("  FILE: ");
-            printlog(file.name());
-            printlog("  SIZE: ");
-            printlnlog(file.size());
-        }
-        file = root.openNextFile();
-    }
-}
-
-void createDir(const char *path)
-{
-    printlogf("Creating Dir: %s\n", path);
-    if (SD.mkdir(path))
-    {
-        printlnlog("- Dir created");
-    }
-    else
-    {
-        printlnlog("- mkdir failed!");
-    }
-}
-
-void readFile(const char *path)
-{
-    printlogf("Reading file: %s\n", path);
-
-    File file = SD.open(path);
-    if (!file)
-    {
-        printlnlog("- Failed to open file for reading!");
-        return;
-    }
-
-    printlog("- Read from file: ");
-    while (file.available())
-    {
-        Serial.write(file.read());
-    }
-    file.close();
-}
-
-void writeFile(const char *path, const char *message)
-{
-    printlogf("Writing file: %s\n", path);
-
-    File file = SD.open(path, FILE_WRITE);
-    if (!file)
-    {
-        printlnlog("- Failed to open file for writing!");
-        return;
-    }
-    if (file.print(message))
-    {
-        printlnlog("- File written");
-    }
-    else
-    {
-        printlnlog("- Write failed!");
-    }
-    file.close();
-}
-
-void appendFile(const char *path, const char *message)
-{
-    printlogf("Appending to file: %s\n", path);
-
-    File file = SD.open(path, FILE_APPEND);
-    if (!file)
-    {
-        printlnlog("- Failed to open file for appending!");
-        return;
-    }
-    if (file.print(message))
-    {
-        printlnlog("- Message appended");
-    }
-    else
-    {
-        printlnlog("- Append failed!");
-    }
-    file.close();
-}
-
-uint16_t createFlightFiles(uint16_t flight_id)
-{
-    String pathName = "/" + String(flight_id);
-
-    if (SD.exists(pathName + "/flight.log"))
-    {
-        printlnlog("Error, flight ID already used, trying next");
-        return createFlightFiles(flight_id + 1);
-    }
-    createDir(pathName.c_str());
-    pathName += "/";
-    logFile = SD.open(pathName + "flight.log", FILE_APPEND);
-    logFile.printf("Flight %i log started\n", flight_id);
-    dataFile = SD.open(pathName + "flight.csv", FILE_APPEND);
-    dataFile.println(CSV_HEADER);
-    eventsFile = SD.open(pathName + "flight.events", FILE_APPEND);
-    eventsFile.println("Flight files initalised");
-    flightFilesReady = true;
-    logFile.flush();
-    dataFile.flush();
-    eventsFile.flush();
-    return flight_id;
-}
-
-void closeFlightFiles()
-{
-    printlnlog("Closing flight files");
-    logFile.close();
-    eventsFile.close();
-    dataFile.close();
-    flightFilesReady = false;
-}
-void initSD()
-{
-    printlnlog("Init SD card");
-    if (!SD.begin(5, SPI, 4000000U, "/sd", 5, true))
-    {
-        printlnlog("- Card Mount Failed!");
-        return;
-    }
-    uint8_t cardType = SD.cardType();
-
-    if (cardType == CARD_NONE)
-    {
-        printlnlog("- No SD card attached!");
-        return;
-    }
-
-    printlog("SD Card Type: ");
-    if (cardType == CARD_MMC)
-    {
-        printlnlog("MMC");
-    }
-    else if (cardType == CARD_SD)
-    {
-        printlnlog("SDSC");
-    }
-    else if (cardType == CARD_SDHC)
-    {
-        printlnlog("SDHC");
-    }
-    else
-    {
-        printlnlog("UNKNOWN");
-    }
-
-    uint64_t cardSize = SD.cardSize() / (1024 * 1024);
-    printlogf("SD Card Size: %lluMB\n", cardSize);
-    printlogf("Total space: %lluMB\n", SD.totalBytes() / (1024 * 1024));
-    printlogf("Used space: %lluMB\n", SD.usedBytes() / (1024 * 1024));
-    sdReady = true;
-}
-
-#endif
-#ifdef COMM_TEST
-void setup()
-{
-    Serial.begin(115200);
-    initComms();
-    testComms();
-    while (1)
-    {
-    }
-}
-
-void loop()
-{
-}
-#else
 void allocateHistoryMemory()
 {
     printlnlog("Allocating history buffers:");
@@ -244,17 +41,20 @@ void initSensors()
 {
 #ifndef SIM_MODE
     printlnlog("Initializing I2C bus & devices...");
-    Wire.begin(SDA, SCL);
+    if (!Wire.begin(SDA, SCL)) {
+        Serial.println("Failed to init I2C bus!");
+        initErrorLoop(SysSettings);
+    }
     printlnlog("- Joined I2C bus");
     printlnlog("(IMU):");
     accelgyro.initialize();
-    accelgyro.setFullScaleAccelRange(3); // +-16g accel scale
 
     // verify connection
     mpu_state = accelgyro.testConnection();
     if (mpu_state)
     {
         printlnlog("- Connected to MPU6050 (AxGy)");
+        accelgyro.setFullScaleAccelRange(3); // +-16g accel scale
         if (SysSettings.useImuOffsets)
         {
             printlnlog("- Setting IMU offsets...");
@@ -340,52 +140,6 @@ void pollGps()
 #endif
 }
 
-uint16_t readFlightId()
-{
-#ifndef SD_CARD
-    return 0;
-#else
-    if (SD.exists("/cflight.yaml"))
-    {
-        fs::File config = SD.open("/cflight.yaml", FILE_READ);
-        String line = "";
-        while (!line.startsWith("flightId:") && line != "EOF")
-        {
-            line = config.readStringUntil('\n');
-        }
-        if (line == "EOF")
-        {
-            return 0;
-        }
-        else
-        {
-            line.replace("flightId:", "");
-            return line.toInt();
-        }
-    }
-    else
-    {
-        saveMetaData();
-        return 0;
-    }
-#endif
-}
-
-bool saveMetaData()
-{
-#ifdef SD_CARD
-    fs::File file = SD.open("/cflight.yaml", FILE_WRITE);
-    if (!file)
-    {
-        printlnlog("Can't open file for writing");
-        return false;
-    }
-    file.printf("flightId:%i\n", flight_id);
-    file.close();
-#endif
-    return true;
-}
-
 void setup()
 {
     // initialize serial communication
@@ -395,10 +149,11 @@ void setup()
     pinMode(SysSettings.statusLedPin, OUTPUT);
     pinMode(SysSettings.errorLedPin, OUTPUT);
     pinMode(SysSettings.buzzerPin, OUTPUT);
-// initialize devices
-#ifdef SD_CARD
-    initSD();
-#endif
+    // initialize devices
+    if (!beginStorage()) {
+        Serial.println("FATAL: failed to init storage during setup()");
+        initErrorLoop(SysSettings);
+    }
     initSensors();
     initComms();
     registerCmdPacketCallback(commandPacketCallback);
@@ -406,7 +161,6 @@ void setup()
 #ifdef RAM_LOG_ENABLED
     allocateHistoryMemory();
 #endif
-    flight_id = readFlightId() + 1;
     printlnlog("Boot complete!");
     previousTime = millis();
     currentTime = millis();
@@ -421,8 +175,6 @@ void setup()
     commandCollector = "";
     printlnlog("ACK");
     state = State::ARMED;
-    saveMetaData();
-    createFlightFiles(flight_id);
 #endif
 }
 
@@ -432,7 +184,7 @@ void registerTasks()
     xTaskCreate(pollSensors, "pollSensors", 2048, NULL, 2, &pollSensorsTaskHandle);
     xTaskCreate(logData, "logData", 2048, NULL, 2, &logDataTaskHandle);
     xTaskCreate(updateOutputs, "updateOutputs", 2048, NULL, 1, &updateOutputsTaskHandle);
-    xTaskCreate(systemReportTask, "systemReport", 2048, NULL, 1, &systemReportTaskHandle);
+    //xTaskCreate(systemReportTask, "systemReport", 2048, NULL, 1, &systemReportTaskHandle);
 }
 
 void pollSensors(void *param)
@@ -499,6 +251,7 @@ void detectEvents(void *param)
             {
                 launchDetectTicker = 0;
                 loggingData = false;
+                resetFlightLog();
                 logIndex = 0;
             }
         }
@@ -559,6 +312,15 @@ void logData(void *param)
     {
         if (loggingData)
         {
+            if (flight_log_open)
+            {
+                if (!writeFLEntry(flight_log_next_entry, millis(), ax, ay, az,
+                                  gx, gy, gz, pressure, 0.0, altitude, deltaAltitude,
+                                  (byte)state, 0))
+                {
+                    Serial.println("Failed to log to flash storage!");
+                }
+            }
 #ifdef RAM_LOG_ENABLED
             altitudeHistory[logIndex] = altitude;
             speedHistory[logIndex] = verticalVelocity;
@@ -569,22 +331,9 @@ void logData(void *param)
                 loggingData = false;
             }
 #endif
-#ifdef SD_CARD
-            if (flightFilesReady)
-            {
-                dataFile.printf("%i,%f,%f,%f,%f\n", currentTime, altitude, verticalVelocity, bmpTemperature, pressure);
-            }
-#endif
-#ifdef FLUSH_EVERY
-            flushCounterData++;
-            if (flushCounterData >= FLUSH_EVERY)
-            {
-                dataFile.flush();
-            }
-#endif
         }
     }
-    vTaskDelay(LOG_INTERVAL);
+    vTaskDelay(1000 / SysSettings.logFrequency);
 }
 
 void pollImu()
@@ -663,18 +412,7 @@ bool firePyroCH(uint8_t channel)
 
 void eventEntry(char *s)
 {
-#ifdef SD_CARD
-    eventsFile.printf("[%s] %s", formatTimestamp(currentTime), s);
-    eventsFile.println();
-
-#ifdef FLUSH_EVERY
-    flushCounterEvents++;
-    if (flushCounterEvents >= FLUSH_EVERY)
-    {
-        eventsFile.flush();
-    }
-#endif
-#endif
+    // TODO
 }
 
 void stateChange(State newState)
@@ -689,14 +427,46 @@ void stateChange(State newState)
     if (newState == State::ARMED)
     {
         Serial.println("MFC: ARMED");
-#ifdef SD_CARD
-        saveMetaData();
-        createFlightFiles(flight_id);
-#endif
+        if (!flight_log_open)
+        {
+            // TODO: check for selected slot with correct filetype, if so use it instead of creating new slot
+            // TODO: check there is enough space to create slot
+            uint8_t sID = nextSlotID();
+            if (!createSlot(1000000, 0b11001000))
+            {
+                Serial.println("Failed to create slot for flight log!");
+            }
+            else
+            {
+                createFlightLog(sID, SysSettings.logFrequency, flight_id, millis()); // TODO: fix flight_id and timestamp
+                Serial.printf("Created flight log in slot %u, logging frequency = %u Hz, flight id = %u\n", sID, SysSettings.logFrequency, flight_id);
+            }
+        }
     }
     if (newState == State::LANDED || newState == State::CALIBRATE || newState == State::IDLE || newState == State::GROUNDSTATION)
     {
         masterArm = false;
+        if (!hasFlown && flight_log_open)
+        {
+            Serial.printf("Unarmed without flight, cleaning up empty flight log in slot %u...\n", flight_log_slot_id);
+            deleteSlot(flight_log_slot_id);
+            flight_log_header_start = 0;
+            flight_log_next_entry = 0;
+            flight_log_entry_count = 0;
+            flight_log_slot_id = 0;
+            flight_log_open = false;
+            Serial.println("Deleted empty flight log");
+        }
+        else if (hasFlown && flight_log_open)
+        {
+            Serial.printf("Saving flight log to slot %u...\n", flight_log_slot_id);
+            closeFlightLog(flight_log_slot_id, flight_log_header_start, flight_log_next_entry - 46, flight_log_entry_count);
+            Serial.println("Closed and saved flight log!");
+        }
+    }
+    else if (newState == ASCENT)
+    {
+        hasFlown = true;
     }
     else
     {
@@ -758,9 +528,10 @@ void report()
     printlnlog("% of RAM history buffer");
     printlnlog("-- (RAM) Flight History Data --");
     printlnlog("time,altitude,speed");
+    int logInterval = 1000 / SysSettings.logFrequency;
     for (uint8_t i = 0; i < finalLogIndex; i++)
     {
-        printlog(i * LOG_INTERVAL);
+        printlog(i * logInterval);
         printlog(",");
         printlog(altitudeHistory[i]);
         printlog(",");
@@ -802,9 +573,6 @@ void systemReport()
     printlogf("Gx: %i Gy: %i Gz: %i\n", gx, gy, gz);
 
     printlogf("DEVICE. Cpu Temperature %f, State: %s\n", cpuTemp(), StateNames[state]);
-#ifdef SD_CARD
-    printlogf("SD card. State: %s \n", sdReady ? "READY" : "ERROR");
-#endif
     // TODO: reset of stats
 }
 
@@ -937,12 +705,6 @@ void updateOutputs(void *params)
         }
         vTaskDelay(50);
     }
-}
-
-void saveFlight()
-{
-    // TODO: Implement!
-    printlnlog("Unimplemented");
 }
 
 void minimalLog()
@@ -1095,4 +857,73 @@ void loop()
     currentTime = millis();
     vTaskDelay(10);
 }
-#endif
+
+void listSlotsToSerial()
+{
+    Slot slots[MAX_SLOT_COUNT];
+    uint8_t slotCount = 0;
+    for (uint8_t id = 1; id < MAX_SLOT_COUNT; id++)
+    {
+        if (doesSlotExist(id))
+        {
+            slots[slotCount] = getSlotInfo(id);
+            slotCount++;
+        }
+    }
+
+    if (slotCount == 0)
+    {
+        Serial.println("[listSlots] No slots in flash storage!");
+        return;
+    }
+
+    Serial.println("-- Flash storage slot list --");
+    for (uint8_t i = 0; i < slotCount; i++)
+    {
+        Serial.printf("(%u/%u) Slot %u: %p -> %p (%X -> %X), status: %X (%p)\n", i + 1, slotCount, slots[i].slotID, slots[i].startAdress, slots[i].endAddress, slots[i].startAdress, slots[i].endAddress, slots[i].statusByte, slots[i].statusByte);
+    }
+    Serial.println("--                         --");
+}
+
+void dumpSlotToSerial(uint8_t slotID, bool fastRead)
+{
+    if (!doesSlotExist(slotID))
+    {
+        Serial.println("[dumpSlot] Slot does not exist!");
+        return;
+    }
+    uint8_t buffer[256];
+    Slot info = getSlotInfo(slotID, fastRead);
+    uint32_t address = 0;
+    int bytesToRead = 256;
+    Serial.printf("[dumpSlot] Slot %u's contents:\n", slotID);
+    while (address < info.endAddress)
+    {
+        bytesToRead = 256;
+        if (address + 256 > info.endAddress)
+            bytesToRead = info.endAddress - address;
+
+        if (!readMemoryBlock(address, address + bytesToRead, buffer, fastRead))
+        {
+            Serial.printf("\nERROR: failed to read data between %p -> %p (%X -> %X) during dump of slot %u\n", info.startAdress, info.endAddress, info.startAdress, info.endAddress, slotID);
+            break;
+        }
+        for (int i = 0; i < bytesToRead; i += 8)
+        {
+            for (int x = 0; x < 8; x++)
+            {
+                Serial.printf("0x%X ", buffer[i + x]);
+            }
+            Serial.println();
+        }
+        address += bytesToRead;
+    }
+    Serial.println("----------------");
+    Serial.println("Dump finished");
+}
+
+void writeSerialToSlot(uint8_t slotID, const char terminator, bool errorChecking)
+{
+    Serial.println("[writeSerialToSlot] ERROR: unimplemented!");
+    // TODO
+}

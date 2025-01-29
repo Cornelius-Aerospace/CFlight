@@ -1,16 +1,62 @@
 #include <flog.h>
 
-SPIFlash storage(CS_PIN);
+Adafruit_FlashTransport_SPI flashTransport(5, SPI);
+Adafruit_SPIFlash storage(&flashTransport);
+FatFileSystem fatfs;
 
 // Look-up table details
-uint32_t lookup_table_begining; // Address where the look-up table begins
-uint32_t lookup_table_end;
+uint32_t lookup_table_begining = 0;                    // Address where the look-up table begins
+uint32_t lookup_table_end = 10 + (MAX_SLOT_COUNT * 9); // 10 bytes for header + 90 bytes for 10 slot registries
 
-uint32_t flight_log_header_start;     // Address where the current FL header begins
-uint32_t flight_log_next_entry;       // Address where the next FL entry will begin
-unsigned long flight_log_entry_count; // The number of FL entries so far
-uint8_t flight_log_slot_id;                 // The number of the current FL's file slot
-bool flight_log_open;
+uint32_t flight_log_header_start = 0;     // Address where the current FL header begins
+uint32_t flight_log_next_entry = 0;       // Address where the next FL entry will begin
+unsigned long flight_log_entry_count = 0; // The number of FL entries so far
+uint8_t flight_log_slot_id = 0;           // The number of the current FL's file slot
+bool flight_log_open = false;
+
+bool beginStorage()
+{
+    if (!storage.begin())
+    {
+        Serial.println("ERROR: Failed to connect to flash storage!");
+        return false;
+    }
+    else
+    {
+        Serial.println("INFO: Connected to SPI flash");
+    }
+    flashTransport.setClockSpeed(24000000, 24000000); // Limmit SPI clock speed to 24MHz (esp32 limmitations)
+
+    Serial.print("- Flash chip JEDEC ID: 0x");
+    Serial.println(storage.getJEDECID(), HEX);
+
+    // First call begin to mount the filesystem.  Check that it returns true
+    // to make sure the filesystem was mounted.
+    if (!fatfs.begin(&storage))
+    {
+        Serial.println("ERROR: failed to mount newly formatted filesystem!");
+        Serial.println(
+            "Was the flash chip formatted?");
+        return false;
+        // TODO: auto format filesystem
+    }
+    Serial.println("- Mounted filesystem!");
+    Serial.printf("Filesystem info:\n - Clusters: %u, Blocks per Cluster: %u\n - Volume type: FAT%u\n", fatfs.clusterCount(), fatfs.blocksPerCluster(), fatfs.fatType());
+    uint32_t volumeSize = fatfs.blocksPerCluster() * fatfs.clusterCount();
+    volumeSize /= 2;
+    Serial.printf(" - Volume size: %u kB", volumeSize);
+    volumeSize /= 1024;
+    Serial.printf(" (%u Mb)\n", volumeSize);
+
+    uint32_t freeSpace = fatfs.blocksPerCluster() * fatfs.freeClusterCount();
+    freeSpace /= 2;
+    Serial.printf(" - Free space: %u Kb (%u Mb)\n", freeSpace, freeSpace / 1024);
+    Serial.println("Files in filesystem [name, date, size (bytes)]:");
+    fatfs.rootDirStart();
+    fatfs.ls(LS_R | LS_DATE | LS_SIZE);
+
+    return true;
+}
 
 // Checksum functions
 // Both XOR checksums are from https://www.luisllamas.es/en/arduino-checksum/
@@ -74,6 +120,7 @@ bool writeFLEntry(uint32_t address, uint32_t time, float aX, float aY, float aZ,
 
     entry[44] = state;
     entry[45] = pyroState;
+    flight_log_next_entry += 46;
 
     return storage.writeByteArray(address, entry, 46, errorCheck);
 }
@@ -107,7 +154,7 @@ bool createFlightLog(uint8_t slotID, uint8_t entryFrequency, uint16_t flightID, 
 uint32_t getFlightLog(uint8_t slotID)
 {
     uint8_t lastSlotID = storage.readByte(lookup_table_begining);
-    if (slotID == 0 || slotID > lastSlotID)
+    if (!doesSlotExist(slotID))
         return 0;
 
     return storage.readULong(lookup_table_begining + 10 + (9 * slotID));
@@ -115,6 +162,12 @@ uint32_t getFlightLog(uint8_t slotID)
 
 bool closeFlightLog(uint8_t slotID, uint32_t headerStart, uint32_t lastEntry, unsigned long entryCount)
 {
+    flight_log_header_start = 0;
+    flight_log_next_entry = 0;
+    flight_log_entry_count = 0;
+    flight_log_slot_id = 0;
+    flight_log_open = false;
+
     if (!storage.writeULong(headerStart + 8, entryCount))
         return false;
     if (!storage.writeULong(headerStart + 13, lastEntry + 1))
@@ -150,6 +203,12 @@ bool updateFLHeaderChecksum(uint32_t address)
     return storage.writeByte(address + 17, checksum);
 }
 
+void resetFlightLog()
+{
+    flight_log_next_entry = flight_log_header_start + 18;
+    flight_log_entry_count = 0;
+}
+
 // - Slot functions -
 // Creates a slot (with the next slotID) of specified size (in bytes) starting at the address
 // directly after the previous slot (or the lookup table if there are no other slots).
@@ -158,6 +217,11 @@ bool createSlot(uint32_t size, byte status)
 {
     uint8_t slotID = storage.readByte(lookup_table_begining);
     slotID++;
+    if (slotID > MAX_SLOT_COUNT)
+    {
+        Serial.println("ERROR: tried to create slot, maximum slots already exist");
+        return false;
+    }
 
     if (!storage.writeByte(lookup_table_begining, slotID))
     {
@@ -183,16 +247,8 @@ bool createSlot(uint32_t size, byte status)
     memcpy(slotRegister + 4, &endAddress, 4U);
     slotRegister[8] = status;
 
-    if (slotID == 1)
-    {
-        if (!storage.writeByteArray(lookup_table_begining + 10, slotRegister, 9))
-            return false;
-    }
-    else
-    {
-        if (!storage.writeByteArray(lookup_table_begining + 10 + (9 * (slotID - 1)), slotRegister, 9))
-            return false;
-    }
+    if (!storage.writeByteArray(lookup_table_begining + 10 + (9 * (slotID - 1)), slotRegister, 9))
+        return false;
 
     uint32_t freeSpace = storage.readULong(lookup_table_begining + 5);
     freeSpace -= size;
@@ -208,7 +264,7 @@ bool createSlot(uint32_t size, byte status)
 // Only use if you know the address range is unallocated and does not overlap with anything.
 bool allocateMemory(uint8_t slotID, uint32_t startAddress, uint32_t endAddress, bool ignoreTests)
 {
-    
+
     if (!ignoreTests && startAddress >= endAddress)
     {
         Serial.printf("ERROR: Tried to allocate storage to slot %u but the start address (%X) is larger than (or equal to) the end address (%X)!\n", slotID, startAddress, endAddress);
@@ -228,7 +284,7 @@ bool allocateMemory(uint8_t slotID, uint32_t startAddress, uint32_t endAddress, 
     }
 
     uint8_t lastSlotID = storage.readByte(lookup_table_begining);
-    if (!ignoreTests && (slotID > lastSlotID || slotID == 0))
+    if (!ignoreTests && !doesSlotExist(slotID))
     {
         Serial.printf("ERROR: Tried to allocate storage to slot %u between %X -> %X, slot does not exist (last slotID = %u)!\n", slotID, startAddress, endAddress, lastSlotID);
         return false;
@@ -237,8 +293,8 @@ bool allocateMemory(uint8_t slotID, uint32_t startAddress, uint32_t endAddress, 
     // TODO: check each slot register to see if requested memory range overlaps with any existing slot allocation?
 
     // Update the freeSpace counter in the look-up table
-    uint32_t oldStartAddress = storage.readULong(lookup_table_begining + 10 + (9 * slotID));
-    uint32_t oldEndAddress = storage.readULong(lookup_table_begining + 10 + (9 * slotID) + 4);
+    uint32_t oldStartAddress = storage.readULong(lookup_table_begining + 10 + (9 * (slotID - 1)));
+    uint32_t oldEndAddress = storage.readULong(lookup_table_begining + 10 + (9 * (slotID - 1)) + 4);
     uint32_t oldSize = oldEndAddress - oldStartAddress;
     uint32_t newSize = endAddress - startAddress;
 
@@ -248,9 +304,9 @@ bool allocateMemory(uint8_t slotID, uint32_t startAddress, uint32_t endAddress, 
     if (!storage.writeULong(lookup_table_begining + 5, freeSpace))
         return false;
 
-    if (!storage.writeULong(lookup_table_begining + 10 + (9 * slotID), startAddress))
+    if (!storage.writeULong(lookup_table_begining + 10 + (9 * (slotID - 1)), startAddress))
         return false;
-    if (!storage.writeULong(lookup_table_begining + 10 + (9 * slotID) + 4, endAddress))
+    if (!storage.writeULong(lookup_table_begining + 10 + (9 * (slotID - 1)) + 4, endAddress))
         return false;
     if (!updateLookupTableChecksum())
         return false;
@@ -262,48 +318,77 @@ bool allocateMemory(uint8_t slotID, uint32_t startAddress, uint32_t endAddress, 
 bool isSlotEmpty(uint8_t slotID)
 {
     uint8_t lastSlotID = storage.readByte(lookup_table_begining);
-    if (slotID > lastSlotID || slotID == 0)
+    if (!doesSlotExist(slotID))
     {
         Serial.printf("WARNING: checked if slot %u is empty, slot does not exist\n", slotID);
         return true;
     }
 
-    byte slotStatus = storage.readByte(lookup_table_begining + 10 + (9 * slotID) + 8);
+    byte slotStatus = storage.readByte(lookup_table_begining + 9 + (9 * slotID));
     return (1 & slotStatus) != 1; // Check the first bit of status byte (if set to 1 the slot is not empty)
 }
 
 bool updateSlotStatus(uint8_t slotID, byte newStatus, bool errorCheck)
 {
     uint8_t lastSlotID = storage.readByte(lookup_table_begining);
-    if (slotID > lastSlotID || slotID == 0)
+    if (!doesSlotExist(slotID))
     {
         Serial.printf("ERROR: Tried to update status of slot %u to %p (%X), slot does not exist\n", slotID, newStatus);
         return false;
     }
 
-    return storage.writeByte(lookup_table_begining + 10 + (9 * slotID) + 8, newStatus, errorCheck);
+    return storage.writeByte(lookup_table_begining + 9 + (9 * slotID), newStatus, errorCheck);
 }
 
 bool getSlotStatus(uint8_t slotID, byte &output)
 {
+    if (!doesSlotExist(slotID))
+        return false;
     uint8_t lastSlotID = storage.readByte(lookup_table_begining);
-    if (slotID > lastSlotID || slotID == 0)
+    if (!doesSlotExist(slotID))
     {
         Serial.printf("ERROR: Tried to get status of slot %u, slot does not exist\n", slotID);
         return false;
     }
 
-    output = storage.readByte(lookup_table_begining + 10 + (9 * slotID) + 8);
+    output = storage.readByte(lookup_table_begining + 9 + (9 * slotID)); // TODO: fix all (10 should be 9)
     return true;
 }
 
 uint8_t nextSlotID()
 {
-    return storage.readByte(lookup_table_begining) + 1;
+    uint8_t id = storage.readByte(lookup_table_begining) + 1;
+    if (id > MAX_SLOT_COUNT)
+        return MAX_SLOT_COUNT;
+
+    return id;
+}
+
+Slot getSlotInfo(uint8_t slotID, bool fastRead)
+{
+    Slot slot = {0, 0, 0, 0};
+    byte status;
+    if (!getSlotStatus(slotID, status))
+        return slot;
+
+    slot.startAdress = storage.readULong(lookup_table_begining + 10 + (9 * (slotID - 1)), fastRead);
+    slot.endAddress = storage.readULong(lookup_table_begining + 10 + (9 * (slotID - 1)) + 4, fastRead);
+    slot.statusByte = status;
+    slot.slotID = slotID;
+    return slot;
+}
+
+bool doesSlotExist(uint8_t slotID, bool fastRead)
+{
+    if (slotID == 0 || slotID > MAX_SLOT_COUNT)
+        return false;
+
+    bool status = storage.readByte(lookup_table_begining + 9 + (9 * slotID), fastRead);
+    return status == 0b00001111;
 }
 
 // TODO: reevaluate how we handle this
-// Currently the slot's status byte is changed and the address space set to 0 -> 0. 
+// Currently the slot's status byte is changed and the address space set to 0 -> 0.
 // The slot register cannot be deleted currently (may cause issues with rest of code)
 // and there is no method for the space to be automatically reused.
 // A better system would defragment the memory, moving the slots after this one back (to reuse the memory space)
@@ -323,14 +408,19 @@ bool deleteSlot(uint8_t slotID, bool errorCheck, bool fastRead)
         return false;
     }
 
-    if (!updateSlotStatus(slotID, 0b10000000, errorCheck))
+    if (!updateSlotStatus(slotID, 0b00001111, errorCheck))
+        return false;
+
+    uint8_t slotCount = storage.readByte(lookup_table_begining, fastRead);
+    slotCount--;
+    if (!storage.writeByte(lookup_table_begining, slotCount, errorCheck))
         return false;
 
     return allocateMemory(slotID, 0, 0, true);
 }
 
 // - Lookup table functions -
-bool createLookupTable(uint32_t address)
+bool createLookupTable()
 {
     // Lookup table format
     // 0: slot count (int)
@@ -338,18 +428,22 @@ bool createLookupTable(uint32_t address)
     // 5-8: free space (uint32_t)
     // 9: checksum/ validity test (byte)
     // 10+: Slot register
-    uint8_t lookupTable[9];
+    uint8_t lookupTable[100]; // 10 for header, rest for 10 slot registers
     uint32_t capacity = storage.getCapacity();
     memcpy(lookupTable + 1, &capacity, 4U);
     memcpy(lookupTable + 5, &capacity, 4U); // Free space = capacity as there are no slots yet
-    if (!storage.writeByteArray(address, lookupTable, 9))
+    for (uint8_t id = 1; id < MAX_SLOT_COUNT; id++)
+    {
+        lookupTable[9 + (id * 9)] = 0b00001111; // "slot does not exist" status byte
+    }
+    if (!storage.writeByteArray(lookup_table_begining, lookupTable, 100))
         return false;
     return updateLookupTableChecksum();
 }
 
 bool updateLookupTableChecksum()
 {
-    uint8_t lookupTable[9];
+    uint8_t lookupTable[9]; // 9 as we exclude the existing checksum from the calculated checksum
     storage.readByteArray(lookup_table_begining, lookupTable, 9);
     byte calculatedChecksum = XORChecksum8(lookupTable, 9);
     return storage.writeByte(lookup_table_begining + 9, calculatedChecksum);
@@ -357,7 +451,7 @@ bool updateLookupTableChecksum()
 
 bool doesLookupTableExist()
 {
-    uint8_t lookupTable[9];
+    uint8_t lookupTable[9]; // 9 as we exclude the existing checksum from the calculated checksum
     storage.readByteArray(lookup_table_begining, lookupTable, 9);
     byte readChecksum = storage.readByte(lookup_table_begining + 9);
     byte calculatedChecksum = XORChecksum8(lookupTable, 9);
